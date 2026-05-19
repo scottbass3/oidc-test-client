@@ -210,6 +210,7 @@ async function buildAuthorizeURL() {
     nonce: getVal('auth-nonce'),
     code_challenge: getVal('auth-code-challenge'),
     code_challenge_method: getVal('auth-code-challenge-method'),
+    code_verifier: getVal('auth-code-verifier'),
     extra_params: extraParams,
   };
 
@@ -220,6 +221,11 @@ async function buildAuthorizeURL() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
+
+    // Reflect auto-generated state/nonce back into the fields so the user
+    // can see what was used and copy it if needed.
+    if (data.state) setVal('auth-state', data.state);
+    if (data.nonce) setVal('auth-nonce', data.nonce);
 
     const el = document.getElementById('auth-result');
     el.classList.remove('hidden');

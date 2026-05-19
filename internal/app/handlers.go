@@ -117,6 +117,7 @@ type authorizeURLRequest struct {
 	Nonce               string            `json:"nonce"`
 	CodeChallenge       string            `json:"code_challenge"`
 	CodeChallengeMethod string            `json:"code_challenge_method"`
+	CodeVerifier        string            `json:"code_verifier"` // stored server-side for callback
 	ExtraParams         map[string]string `json:"extra_params"`
 }
 
@@ -144,18 +145,45 @@ func (s *Server) handleAuthorizeURL(w http.ResponseWriter, r *http.Request) {
 		scopes = cfg.Scopes
 	}
 
+	// Auto-generate state and nonce so the URL is always valid and the
+	// callback can complete the flow even when "Open in Browser" is used.
+	state := req.State
+	if state == "" {
+		var err error
+		state, err = generateRandom(16)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "failed to generate state: " + err.Error()})
+			return
+		}
+	}
+	nonce := req.Nonce
+	if nonce == "" {
+		var err error
+		nonce, err = generateRandom(16)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "failed to generate nonce: " + err.Error()})
+			return
+		}
+	}
+
+	// Register the state so /auth/callback can complete the exchange.
+	s.flowMu.Lock()
+	s.flowStates[state] = &FlowState{
+		State:        state,
+		Nonce:        nonce,
+		CodeVerifier: req.CodeVerifier,
+		CreatedAt:    time.Now(),
+	}
+	s.flowMu.Unlock()
+
 	params := url.Values{}
 	params.Set("response_type", responseType)
 	params.Set("client_id", clientID)
 	params.Set("redirect_uri", redirectURI)
 	params.Set("scope", strings.Join(scopes, " "))
+	params.Set("state", state)
+	params.Set("nonce", nonce)
 
-	if req.State != "" {
-		params.Set("state", req.State)
-	}
-	if req.Nonce != "" {
-		params.Set("nonce", req.Nonce)
-	}
 	if responseMode != "" {
 		params.Set("response_mode", responseMode)
 	}
@@ -175,6 +203,8 @@ func (s *Server) handleAuthorizeURL(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{
 		"url":    authURL + "?" + params.Encode(),
 		"params": params,
+		"state":  state,
+		"nonce":  nonce,
 	})
 }
 
