@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OIDC Test Client</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <span class="logo">⬡ OIDC Test Client</span>
+    <span class="subtitle">OAuth2 / OpenID Connect Debugger</span>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="config">Config</button>
+    <button class="tab-btn" data-tab="discovery">Discovery</button>
+    <button class="tab-btn" data-tab="authorize">Authorize</button>
+    <button class="tab-btn" data-tab="token">Token Exchange</button>
+    <button class="tab-btn" data-tab="refresh">Refresh</button>
+    <button class="tab-btn" data-tab="userinfo">UserInfo</button>
+    <button class="tab-btn" data-tab="introspect">Introspect</button>
+    <button class="tab-btn" data-tab="jwt">JWT Decode</button>
+    <button class="tab-btn" data-tab="flow">Full Flow</button>
+  </nav>
+
+  <main>
+    <!-- CONFIG TAB -->
+    <div id="tab-config" class="tab-content active">
+      <div class="panel">
+        <h3>Provider Endpoints</h3>
+        <div class="form-row">
+          <label>Issuer URL</label>
+          <input type="text" id="cfg-issuer-url" placeholder="https://accounts.example.com">
+          <button class="btn-secondary" onclick="discoverAndUpdate()">Auto-discover</button>
+        </div>
+        <div class="form-row">
+          <label>Authorization URL</label>
+          <input type="text" id="cfg-auth-url" placeholder="https://accounts.example.com/oauth2/authorize">
+        </div>
+        <div class="form-row">
+          <label>Token URL</label>
+          <input type="text" id="cfg-token-url" placeholder="https://accounts.example.com/oauth2/token">
+        </div>
+        <div class="form-row">
+          <label>UserInfo URL</label>
+          <input type="text" id="cfg-userinfo-url" placeholder="https://accounts.example.com/oauth2/userinfo">
+        </div>
+        <div class="form-row">
+          <label>Introspection URL</label>
+          <input type="text" id="cfg-introspection-url" placeholder="https://accounts.example.com/oauth2/introspect">
+        </div>
+        <div class="form-row">
+          <label>End Session URL</label>
+          <input type="text" id="cfg-end-session-url" placeholder="https://accounts.example.com/oauth2/logout">
+        </div>
+        <div class="form-row">
+          <label>JWKS URI</label>
+          <input type="text" id="cfg-jwks-uri" placeholder="https://accounts.example.com/oauth2/jwks">
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Client</h3>
+        <div class="form-row">
+          <label>Client ID</label>
+          <input type="text" id="cfg-client-id" placeholder="my-client">
+        </div>
+        <div class="form-row">
+          <label>Client Secret</label>
+          <input type="password" id="cfg-client-secret" placeholder="••••••••">
+          <button class="btn-secondary" onclick="toggleSecret('cfg-client-secret')">Show</button>
+        </div>
+        <div class="form-row">
+          <label>Redirect URI</label>
+          <input type="text" id="cfg-redirect-uri" placeholder="http://localhost:8080/auth/callback">
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Request Defaults</h3>
+        <div class="form-row">
+          <label>Scopes</label>
+          <input type="text" id="cfg-scopes" placeholder="openid profile email">
+          <span class="hint">space-separated</span>
+        </div>
+        <div class="form-row">
+          <label>Response Type</label>
+          <select id="cfg-response-type">
+            <option value="code">code</option>
+            <option value="token">token</option>
+            <option value="id_token">id_token</option>
+            <option value="code token">code token</option>
+            <option value="code id_token">code id_token</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Response Mode</label>
+          <select id="cfg-response-mode">
+            <option value="">default</option>
+            <option value="query">query</option>
+            <option value="fragment">fragment</option>
+            <option value="form_post">form_post</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>PKCE</h3>
+        <div class="form-row">
+          <label>Enable PKCE</label>
+          <input type="checkbox" id="cfg-pkce-enabled" style="width:auto">
+        </div>
+        <div class="form-row">
+          <label>PKCE Method</label>
+          <select id="cfg-pkce-method">
+            <option value="S256">S256 (recommended)</option>
+            <option value="plain">plain</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Extra Parameters</h3>
+        <div class="form-row">
+          <label>Extra Authorize Params</label>
+          <textarea id="cfg-extra-authorize" rows="3" placeholder='{"audience": "api://my-api"}'></textarea>
+        </div>
+        <div class="form-row">
+          <label>Extra Token Params</label>
+          <textarea id="cfg-extra-token" rows="3" placeholder='{"resource": "api://my-api"}'></textarea>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn-primary" onclick="saveConfig()">Save Configuration</button>
+        <span id="config-status" class="status-msg"></span>
+      </div>
+    </div>
+
+    <!-- DISCOVERY TAB -->
+    <div id="tab-discovery" class="tab-content">
+      <div class="panel">
+        <h3>OIDC Discovery</h3>
+        <div class="form-row">
+          <label>Issuer URL</label>
+          <input type="text" id="disc-issuer-url" placeholder="https://accounts.example.com">
+        </div>
+        <div class="actions">
+          <button class="btn-primary" onclick="runDiscovery(false)">Fetch Discovery</button>
+          <button class="btn-secondary" onclick="runDiscovery(true)">Fetch &amp; Update Config</button>
+        </div>
+      </div>
+      <div id="disc-result" class="result-area hidden"></div>
+    </div>
+
+    <!-- AUTHORIZE TAB -->
+    <div id="tab-authorize" class="tab-content">
+      <div class="panel">
+        <h3>Authorization Request</h3>
+        <div class="form-row">
+          <label>Authorization URL</label>
+          <input type="text" id="auth-url" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Client ID</label>
+          <input type="text" id="auth-client-id" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Redirect URI</label>
+          <input type="text" id="auth-redirect-uri" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Scopes</label>
+          <input type="text" id="auth-scopes" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Response Type</label>
+          <input type="text" id="auth-response-type" placeholder="code">
+        </div>
+        <div class="form-row">
+          <label>Response Mode</label>
+          <input type="text" id="auth-response-mode" placeholder="(default)">
+        </div>
+        <div class="form-row">
+          <label>State</label>
+          <input type="text" id="auth-state" placeholder="auto-generated">
+          <button class="btn-secondary" onclick="genRandom('auth-state', 16)">Generate</button>
+        </div>
+        <div class="form-row">
+          <label>Nonce</label>
+          <input type="text" id="auth-nonce" placeholder="auto-generated">
+          <button class="btn-secondary" onclick="genRandom('auth-nonce', 16)">Generate</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>PKCE</h3>
+        <div class="form-row">
+          <label>Method</label>
+          <select id="auth-pkce-method">
+            <option value="S256">S256</option>
+            <option value="plain">plain</option>
+          </select>
+          <button class="btn-secondary" onclick="generatePKCE()">Generate PKCE</button>
+        </div>
+        <div class="form-row">
+          <label>Code Verifier</label>
+          <input type="text" id="auth-code-verifier" placeholder="generate above">
+          <button class="btn-secondary" onclick="copyField('auth-code-verifier')">Copy</button>
+        </div>
+        <div class="form-row">
+          <label>Code Challenge</label>
+          <input type="text" id="auth-code-challenge" readonly placeholder="derived from verifier">
+        </div>
+        <div class="form-row">
+          <label>Code Challenge Method</label>
+          <input type="text" id="auth-code-challenge-method" readonly>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Extra Parameters</h3>
+        <textarea id="auth-extra-params" rows="3" placeholder='{"prompt": "login", "acr_values": "urn:..."}'></textarea>
+      </div>
+
+      <div class="actions">
+        <button class="btn-primary" onclick="buildAuthorizeURL()">Build URL</button>
+      </div>
+      <div id="auth-result" class="result-area hidden"></div>
+    </div>
+
+    <!-- TOKEN EXCHANGE TAB -->
+    <div id="tab-token" class="tab-content">
+      <div class="panel">
+        <h3>Authorization Code Exchange</h3>
+        <div class="form-row">
+          <label>Token URL</label>
+          <input type="text" id="tok-token-url" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Client ID</label>
+          <input type="text" id="tok-client-id" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Client Secret</label>
+          <input type="password" id="tok-client-secret" placeholder="from config">
+          <button class="btn-secondary" onclick="toggleSecret('tok-client-secret')">Show</button>
+        </div>
+        <div class="form-row">
+          <label>Authorization Code</label>
+          <input type="text" id="tok-code" placeholder="code from callback">
+        </div>
+        <div class="form-row">
+          <label>Redirect URI</label>
+          <input type="text" id="tok-redirect-uri" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Code Verifier (PKCE)</label>
+          <input type="text" id="tok-code-verifier" placeholder="from authorize tab">
+          <button class="btn-secondary" onclick="copyFromAuthorize()">Copy from Authorize</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Extra Parameters</h3>
+        <textarea id="tok-extra-params" rows="3" placeholder='{"resource": "api://..."}'></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn-primary" onclick="exchangeToken()">Exchange Code</button>
+      </div>
+      <div id="tok-result" class="result-area hidden"></div>
+    </div>
+
+    <!-- REFRESH TAB -->
+    <div id="tab-refresh" class="tab-content">
+      <div class="panel">
+        <h3>Refresh Token</h3>
+        <div class="form-row">
+          <label>Token URL</label>
+          <input type="text" id="ref-token-url" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Client ID</label>
+          <input type="text" id="ref-client-id" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Client Secret</label>
+          <input type="password" id="ref-client-secret" placeholder="from config">
+          <button class="btn-secondary" onclick="toggleSecret('ref-client-secret')">Show</button>
+        </div>
+        <div class="form-row">
+          <label>Refresh Token</label>
+          <textarea id="ref-refresh-token" rows="3" placeholder="paste refresh token"></textarea>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Extra Parameters</h3>
+        <textarea id="ref-extra-params" rows="3" placeholder='{"scope": "openid profile"}'></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn-primary" onclick="doRefresh()">Refresh Token</button>
+      </div>
+      <div id="ref-result" class="result-area hidden"></div>
+    </div>
+
+    <!-- USERINFO TAB -->
+    <div id="tab-userinfo" class="tab-content">
+      <div class="panel">
+        <h3>UserInfo Request</h3>
+        <div class="form-row">
+          <label>UserInfo URL</label>
+          <input type="text" id="ui-userinfo-url" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Access Token</label>
+          <textarea id="ui-access-token" rows="3" placeholder="paste access token"></textarea>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn-primary" onclick="fetchUserInfo()">Fetch UserInfo</button>
+      </div>
+      <div id="ui-result" class="result-area hidden"></div>
+    </div>
+
+    <!-- INTROSPECT TAB -->
+    <div id="tab-introspect" class="tab-content">
+      <div class="panel">
+        <h3>Token Introspection</h3>
+        <div class="form-row">
+          <label>Introspection URL</label>
+          <input type="text" id="intr-url" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Client ID</label>
+          <input type="text" id="intr-client-id" placeholder="from config">
+        </div>
+        <div class="form-row">
+          <label>Client Secret</label>
+          <input type="password" id="intr-client-secret" placeholder="from config">
+          <button class="btn-secondary" onclick="toggleSecret('intr-client-secret')">Show</button>
+        </div>
+        <div class="form-row">
+          <label>Token</label>
+          <textarea id="intr-token" rows="3" placeholder="paste token to introspect"></textarea>
+        </div>
+        <div class="form-row">
+          <label>Token Type Hint</label>
+          <select id="intr-hint">
+            <option value="">(none)</option>
+            <option value="access_token">access_token</option>
+            <option value="refresh_token">refresh_token</option>
+            <option value="id_token">id_token</option>
+          </select>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn-primary" onclick="doIntrospect()">Introspect</button>
+      </div>
+      <div id="intr-result" class="result-area hidden"></div>
+    </div>
+
+    <!-- JWT DECODE TAB -->
+    <div id="tab-jwt" class="tab-content">
+      <div class="panel">
+        <h3>JWT Decoder</h3>
+        <p class="hint-text">Decodes a JWT without signature verification. Useful for inspecting claims.</p>
+        <div class="form-row">
+          <label>JWT</label>
+          <textarea id="jwt-token" rows="5" placeholder="paste JWT here..."></textarea>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn-primary" onclick="decodeJWT()">Decode</button>
+      </div>
+      <div id="jwt-result" class="result-area hidden"></div>
+    </div>
+
+    <!-- FULL FLOW TAB -->
+    <div id="tab-flow" class="tab-content">
+      <div class="panel">
+        <h3>Full Authorization Code Flow</h3>
+        <p class="hint-text">
+          Initiates a complete authorization code flow by redirecting your browser to the provider.
+          Make sure your config is saved and the redirect URI is set to
+          <code>http://&lt;host&gt;:&lt;port&gt;/auth/callback</code>.
+        </p>
+
+        <div class="config-summary" id="flow-summary"></div>
+
+        <div class="actions">
+          <button class="btn-primary btn-large" onclick="startFlow()">Start Authorization Flow</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Current Config Summary</h3>
+        <div id="flow-config-preview" class="config-preview"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

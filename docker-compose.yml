@@ -1,0 +1,30 @@
+services:
+  oidc-test-client:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      # Pre-configure via environment variables (optional)
+      # OIDC_ISSUER_URL: "https://accounts.example.com"
+      # OIDC_CLIENT_ID: "my-client"
+      # OIDC_CLIENT_SECRET: "my-secret"
+      # OIDC_REDIRECT_URI: "http://localhost:8080/auth/callback"
+      # OIDC_AUTH_URL: ""
+      # OIDC_TOKEN_URL: ""
+      # OIDC_USERINFO_URL: ""
+      # OIDC_INTROSPECTION_URL: ""
+      #
+      # Path to a startup script run before the app starts.
+      # The script is sourced (not executed), so env vars it sets propagate.
+      # STARTUP_SCRIPT: /startup.sh
+    volumes:
+      # Mount a startup script for dynamic setup (e.g. registering a client)
+      # - ./my-startup.sh:/startup.sh:ro
+      #
+      # Persist config across restarts
+      - oidc-config:/app
+    restart: unless-stopped
+
+volumes:
+  oidc-config:
