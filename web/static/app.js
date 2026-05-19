@@ -12,6 +12,14 @@ const state = {
 document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   loadConfig();
+
+  const params = new URLSearchParams(window.location.search);
+  const flowId = params.get('flow');
+  if (flowId) {
+    window.history.replaceState({}, '', '/');
+    switchTab('history');
+    loadHistory(flowId);
+  }
 });
 
 function initTabs() {
@@ -23,6 +31,7 @@ function initTabs() {
       btn.classList.add('active');
       document.getElementById('tab-' + tab).classList.add('active');
       if (tab === 'flow') renderFlowPreview();
+      if (tab === 'history') loadHistory();
     });
   });
 }
@@ -465,6 +474,135 @@ function renderFlowPreview() {
 
 function startFlow() {
   window.location.href = '/auth/start';
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+
+async function loadHistory(highlightId) {
+  try {
+    const res = await fetch('/api/history');
+    const entries = await res.json();
+    renderHistory(entries, highlightId);
+  } catch (_) {}
+}
+
+function renderHistory(entries, highlightId) {
+  const el = document.getElementById('history-list');
+  el.innerHTML = '';
+  if (!entries || entries.length === 0) {
+    el.innerHTML = '<p style="color:var(--text-muted);margin:0">No flows yet. Use Full Flow or Authorize → Open in Browser to start one.</p>';
+    return;
+  }
+  for (const entry of entries) {
+    renderHistoryEntry(el, entry, entry.id === highlightId);
+  }
+}
+
+function renderHistoryEntry(container, entry, expanded) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'border:1px solid var(--border);border-radius:6px;margin-bottom:0.75rem;overflow:hidden';
+  if (expanded) wrap.style.borderColor = 'var(--green)';
+
+  const hasError = !!(entry.result && entry.result.error);
+  const ts = new Date(entry.created_at).toLocaleString();
+  const dot = hasError ? '🔴' : '🟢';
+
+  const header = document.createElement('div');
+  header.style.cssText = 'padding:0.6rem 1rem;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:var(--surface-2);user-select:none';
+  header.innerHTML = `<span>${dot} ${escHtml(ts)}</span><span style="color:var(--text-muted);font-size:0.8rem">${escHtml(entry.id)}</span>`;
+
+  const body = document.createElement('div');
+  body.style.cssText = 'padding:0.75rem 1rem 1rem';
+  body.style.display = expanded ? '' : 'none';
+
+  header.addEventListener('click', () => {
+    body.style.display = body.style.display === 'none' ? '' : 'none';
+  });
+
+  if (entry.result) {
+    buildHistoryBody(body, entry.result);
+  }
+
+  wrap.appendChild(header);
+  wrap.appendChild(body);
+  container.appendChild(wrap);
+
+  if (expanded) wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function buildHistoryBody(container, result) {
+  if (result.error) {
+    const div = document.createElement('div');
+    div.style.cssText = 'color:var(--red);background:rgba(248,81,73,0.1);border:1px solid var(--red);border-radius:6px;padding:0.75rem;margin-bottom:0.5rem;font-size:0.85rem';
+    div.textContent = result.error;
+    container.appendChild(div);
+  }
+
+  if (result.response) {
+    const section = makeResultSection('Token Response');
+    const pre = document.createElement('pre');
+    let bodyStr = result.response.body;
+    try { bodyStr = JSON.stringify(JSON.parse(bodyStr), null, 2); } catch (_) {}
+    pre.innerHTML = syntaxHighlight(bodyStr);
+    section.body.appendChild(pre);
+    container.appendChild(section.el);
+
+    try {
+      const parsed = JSON.parse(result.response.body);
+      const actions = document.createElement('div');
+      actions.style.cssText = 'display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem';
+
+      if (parsed.access_token) {
+        addActionBtn(actions, 'UserInfo', () => {
+          setVal('ui-access-token', parsed.access_token);
+          switchTab('userinfo');
+        });
+        addActionBtn(actions, 'Introspect', () => {
+          setVal('intr-token', parsed.access_token);
+          switchTab('introspect');
+        });
+        addActionBtn(actions, 'Decode access_token', () => {
+          setVal('jwt-token', parsed.access_token);
+          switchTab('jwt');
+          decodeJWT();
+        });
+      }
+
+      if (parsed.id_token) {
+        addActionBtn(actions, 'Decode id_token', () => {
+          setVal('jwt-token', parsed.id_token);
+          switchTab('jwt');
+          decodeJWT();
+        });
+      }
+
+      if (parsed.refresh_token) {
+        addActionBtn(actions, 'Refresh', () => {
+          setVal('ref-refresh-token', parsed.refresh_token);
+          switchTab('refresh');
+        });
+      }
+
+      if (actions.children.length > 0) container.appendChild(actions);
+    } catch (_) {}
+  }
+
+  if (result.request) {
+    const section = makeResultSection('Request');
+    const pre = document.createElement('pre');
+    pre.innerHTML = syntaxHighlight(JSON.stringify(result.request, null, 2));
+    section.body.appendChild(pre);
+    section.body.style.display = 'none';
+    container.appendChild(section.el);
+  }
+}
+
+function addActionBtn(container, label, onclick) {
+  const btn = document.createElement('button');
+  btn.className = 'btn-secondary';
+  btn.textContent = label;
+  btn.onclick = onclick;
+  container.appendChild(btn);
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────

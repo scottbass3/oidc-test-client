@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const maxHistory = 10
+
 type FlowState struct {
 	State         string
 	Nonce         string
@@ -15,11 +17,19 @@ type FlowState struct {
 	CreatedAt     time.Time
 }
 
+type HistoryEntry struct {
+	ID        string      `json:"id"`
+	CreatedAt time.Time   `json:"created_at"`
+	Result    *OIDCResult `json:"result"`
+}
+
 type Server struct {
 	mux        *http.ServeMux
 	config     *ConfigStore
 	flowStates map[string]*FlowState
 	flowMu     sync.Mutex
+	history    []*HistoryEntry
+	historyMu  sync.RWMutex
 	staticFS   fs.FS
 }
 
@@ -42,6 +52,22 @@ func New(opts Options) *Server {
 
 func (s *Server) Start(addr string) error {
 	return http.ListenAndServe(addr, s.mux)
+}
+
+func (s *Server) addHistory(result *OIDCResult) string {
+	id, _ := generateRandom(8)
+	entry := &HistoryEntry{
+		ID:        id,
+		CreatedAt: time.Now(),
+		Result:    result,
+	}
+	s.historyMu.Lock()
+	s.history = append(s.history, entry)
+	if len(s.history) > maxHistory {
+		s.history = s.history[len(s.history)-maxHistory:]
+	}
+	s.historyMu.Unlock()
+	return id
 }
 
 // cleanFlowStates removes stale flow states older than 10 minutes.

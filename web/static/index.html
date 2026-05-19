@@ -22,6 +22,7 @@
     <button class="tab-btn" data-tab="introspect">Introspect</button>
     <button class="tab-btn" data-tab="jwt">JWT Decode</button>
     <button class="tab-btn" data-tab="flow">Full Flow</button>
+    <button class="tab-btn" data-tab="history">History</button>
   </nav>
 
   <main>
@@ -395,6 +396,15 @@
       <div class="panel">
         <h3>Current Config Summary</h3>
         <div id="flow-config-preview" class="config-preview"></div>
+      </div>
+    </div>
+
+    <!-- HISTORY TAB -->
+    <div id="tab-history" class="tab-content">
+      <div class="panel">
+        <h3>Auth Flow History</h3>
+        <p class="hint-text">Last 10 completed authorization flows. Click a row to expand the token response and run follow-up requests.</p>
+        <div id="history-list"></div>
       </div>
     </div>
   </main>

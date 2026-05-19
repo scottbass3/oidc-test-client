@@ -24,6 +24,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/userinfo", s.handleUserInfo)
 	s.mux.HandleFunc("/api/introspect", s.handleIntrospect)
 	s.mux.HandleFunc("/api/jwt/decode", s.handleJWTDecode)
+	s.mux.HandleFunc("/api/history", s.handleHistory)
 	s.mux.HandleFunc("/auth/start", s.handleAuthStart)
 	s.mux.HandleFunc("/auth/callback", s.handleAuthCallback)
 }
@@ -487,7 +488,40 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	extra := mergeParams(cfg.ExtraTokenParams, nil)
 
 	result := exchangeCode(cfg.TokenURL, cfg.ClientID, cfg.ClientSecret, code, cfg.RedirectURI, flowState.CodeVerifier, extra)
-	renderCallbackSuccess(w, result)
+	id := s.addHistory(result)
+	http.Redirect(w, r, "/?flow="+id, http.StatusFound)
+}
+
+// --- History ---
+
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(405)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+
+	s.historyMu.RLock()
+	defer s.historyMu.RUnlock()
+
+	if id != "" {
+		for _, e := range s.history {
+			if e.ID == id {
+				writeJSON(w, 200, e)
+				return
+			}
+		}
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+
+	// Newest first
+	out := make([]*HistoryEntry, len(s.history))
+	for i, e := range s.history {
+		out[len(s.history)-1-i] = e
+	}
+	writeJSON(w, 200, out)
 }
 
 func renderCallbackError(w http.ResponseWriter, msg string) {
@@ -511,27 +545,6 @@ a{color:#58a6ff}
 </html>`, msg)
 }
 
-func renderCallbackSuccess(w http.ResponseWriter, result *OIDCResult) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	resultJSON, _ := json.MarshalIndent(result, "", "  ")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Auth Callback</title>
-<style>
-*{box-sizing:border-box}
-body{background:#0d1117;color:#c9d1d9;font-family:monospace;padding:2rem;margin:0}
-pre{background:#161b22;padding:1rem;border-radius:6px;overflow:auto;border:1px solid #30363d;font-size:13px}
-a{color:#58a6ff}
-h2{color:#3fb950}
-</style>
-</head>
-<body>
-<h2>Auth Flow Complete</h2>
-<pre>%s</pre>
-<p><a href="/">← Back to OIDC Test Client</a></p>
-</body>
-</html>`, string(resultJSON))
-}
 
 // --- Helpers ---
 
