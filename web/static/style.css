@@ -423,6 +423,55 @@ button:active {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
+/* Inner tabs (history entry sub-tabs) */
+.inner-tabs-wrap {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+
+.inner-tabs {
+  display: flex;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.inner-tab-btn {
+  padding: 0.35rem 0.75rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.inner-tab-btn:hover {
+  color: var(--text);
+}
+
+.inner-tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.inner-tabs-body {
+  background: var(--bg2);
+}
+
+.inner-tab-content {
+  display: none;
+  padding: 0.75rem;
+}
+
+.inner-tab-content.active {
+  display: block;
+}
+
 /* Responsive */
 @media (max-width: 640px) {
   .form-row {

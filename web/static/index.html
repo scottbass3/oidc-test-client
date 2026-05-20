@@ -13,7 +13,9 @@
   </header>
 
   <nav class="tabs">
-    <button class="tab-btn active" data-tab="config">Config</button>
+    <button class="tab-btn active" data-tab="flow">Authenticate</button>
+    <button class="tab-btn" data-tab="history">History</button>
+    <button class="tab-btn" data-tab="config">Config</button>
     <button class="tab-btn" data-tab="discovery">Discovery</button>
     <button class="tab-btn" data-tab="authorize">Authorize</button>
     <button class="tab-btn" data-tab="token">Token Exchange</button>
@@ -21,13 +23,43 @@
     <button class="tab-btn" data-tab="userinfo">UserInfo</button>
     <button class="tab-btn" data-tab="introspect">Introspect</button>
     <button class="tab-btn" data-tab="jwt">JWT Decode</button>
-    <button class="tab-btn" data-tab="flow">Full Flow</button>
-    <button class="tab-btn" data-tab="history">History</button>
   </nav>
 
   <main>
+    <!-- AUTHENTICATE (FULL FLOW) TAB -->
+    <div id="tab-flow" class="tab-content active">
+      <div class="panel">
+        <h3>Full Authorization Code Flow</h3>
+        <p class="hint-text">
+          Initiates a complete authorization code flow by redirecting your browser to the provider.
+          Make sure your config is saved and the redirect URI is set to
+          <code>http://&lt;host&gt;:&lt;port&gt;/auth/callback</code>.
+        </p>
+
+        <div class="config-summary" id="flow-summary"></div>
+
+        <div class="actions">
+          <button class="btn-primary btn-large" onclick="startFlow()">Start Authorization Flow</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Current Config Summary</h3>
+        <div id="flow-config-preview" class="config-preview"></div>
+      </div>
+    </div>
+
+    <!-- HISTORY TAB -->
+    <div id="tab-history" class="tab-content">
+      <div class="panel">
+        <h3>Auth Flow History</h3>
+        <p class="hint-text">Last 10 completed authorization flows. Click a row to expand.</p>
+        <div id="history-list"></div>
+      </div>
+    </div>
+
     <!-- CONFIG TAB -->
-    <div id="tab-config" class="tab-content active">
+    <div id="tab-config" class="tab-content">
       <div class="panel">
         <h3>Provider Endpoints</h3>
         <div class="form-row">
@@ -374,38 +406,6 @@
         <button class="btn-primary" onclick="decodeJWT()">Decode</button>
       </div>
       <div id="jwt-result" class="result-area hidden"></div>
-    </div>
-
-    <!-- FULL FLOW TAB -->
-    <div id="tab-flow" class="tab-content">
-      <div class="panel">
-        <h3>Full Authorization Code Flow</h3>
-        <p class="hint-text">
-          Initiates a complete authorization code flow by redirecting your browser to the provider.
-          Make sure your config is saved and the redirect URI is set to
-          <code>http://&lt;host&gt;:&lt;port&gt;/auth/callback</code>.
-        </p>
-
-        <div class="config-summary" id="flow-summary"></div>
-
-        <div class="actions">
-          <button class="btn-primary btn-large" onclick="startFlow()">Start Authorization Flow</button>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h3>Current Config Summary</h3>
-        <div id="flow-config-preview" class="config-preview"></div>
-      </div>
-    </div>
-
-    <!-- HISTORY TAB -->
-    <div id="tab-history" class="tab-content">
-      <div class="panel">
-        <h3>Auth Flow History</h3>
-        <p class="hint-text">Last 10 completed authorization flows. Click a row to expand the token response and run follow-up requests.</p>
-        <div id="history-list"></div>
-      </div>
     </div>
   </main>
 

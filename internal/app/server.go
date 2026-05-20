@@ -18,9 +18,10 @@ type FlowState struct {
 }
 
 type HistoryEntry struct {
-	ID        string      `json:"id"`
-	CreatedAt time.Time   `json:"created_at"`
-	Result    *OIDCResult `json:"result"`
+	ID             string            `json:"id"`
+	CreatedAt      time.Time         `json:"created_at"`
+	Result         *OIDCResult       `json:"result"`
+	CallbackParams map[string]string `json:"callback_params,omitempty"`
 }
 
 type Server struct {
@@ -54,12 +55,13 @@ func (s *Server) Start(addr string) error {
 	return http.ListenAndServe(addr, s.mux)
 }
 
-func (s *Server) addHistory(result *OIDCResult) string {
+func (s *Server) addHistory(result *OIDCResult, callbackParams map[string]string) string {
 	id, _ := generateRandom(8)
 	entry := &HistoryEntry{
-		ID:        id,
-		CreatedAt: time.Now(),
-		Result:    result,
+		ID:             id,
+		CreatedAt:      time.Now(),
+		Result:         result,
+		CallbackParams: callbackParams,
 	}
 	s.historyMu.Lock()
 	s.history = append(s.history, entry)

@@ -484,11 +484,18 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	callbackParams := make(map[string]string)
+	for k, vs := range q {
+		if len(vs) > 0 {
+			callbackParams[k] = vs[0]
+		}
+	}
+
 	cfg := s.config.Get()
 	extra := mergeParams(cfg.ExtraTokenParams, nil)
 
 	result := exchangeCode(cfg.TokenURL, cfg.ClientID, cfg.ClientSecret, code, cfg.RedirectURI, flowState.CodeVerifier, extra)
-	id := s.addHistory(result)
+	id := s.addHistory(result, callbackParams)
 	http.Redirect(w, r, "/?flow="+id, http.StatusFound)
 }
 

@@ -45,6 +45,7 @@ async function loadConfig() {
     state.config = cfg;
     applyConfigToForm(cfg);
     prefillFromConfig();
+    renderFlowPreview();
   } catch (e) {
     showStatus('config-status', 'Failed to load config: ' + e.message, true);
   }
@@ -508,7 +509,7 @@ function renderHistoryEntry(container, entry, expanded) {
   const dot = hasError ? '🔴' : '🟢';
 
   const header = document.createElement('div');
-  header.style.cssText = 'padding:0.6rem 1rem;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:var(--surface-2);user-select:none';
+  header.style.cssText = 'padding:0.6rem 1rem;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:var(--bg3);user-select:none';
   header.innerHTML = `<span>${dot} ${escHtml(ts)}</span><span style="color:var(--text-muted);font-size:0.8rem">${escHtml(entry.id)}</span>`;
 
   const body = document.createElement('div');
@@ -520,7 +521,7 @@ function renderHistoryEntry(container, entry, expanded) {
   });
 
   if (entry.result) {
-    buildHistoryBody(body, entry.result);
+    buildHistoryBody(body, entry);
   }
 
   wrap.appendChild(header);
@@ -530,7 +531,9 @@ function renderHistoryEntry(container, entry, expanded) {
   if (expanded) wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function buildHistoryBody(container, result) {
+function buildHistoryBody(container, entry) {
+  const result = entry.result;
+
   if (result.error) {
     const div = document.createElement('div');
     div.style.cssText = 'color:var(--red);background:rgba(248,81,73,0.1);border:1px solid var(--red);border-radius:6px;padding:0.75rem;margin-bottom:0.5rem;font-size:0.85rem';
@@ -538,62 +541,271 @@ function buildHistoryBody(container, result) {
     container.appendChild(div);
   }
 
+  let parsed = null;
   if (result.response) {
-    const section = makeResultSection('Token Response');
-    const pre = document.createElement('pre');
-    let bodyStr = result.response.body;
-    try { bodyStr = JSON.stringify(JSON.parse(bodyStr), null, 2); } catch (_) {}
-    pre.innerHTML = syntaxHighlight(bodyStr);
-    section.body.appendChild(pre);
-    container.appendChild(section.el);
-
-    try {
-      const parsed = JSON.parse(result.response.body);
-      const actions = document.createElement('div');
-      actions.style.cssText = 'display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem';
-
-      if (parsed.access_token) {
-        addActionBtn(actions, 'UserInfo', () => {
-          setVal('ui-access-token', parsed.access_token);
-          switchTab('userinfo');
-        });
-        addActionBtn(actions, 'Introspect', () => {
-          setVal('intr-token', parsed.access_token);
-          switchTab('introspect');
-        });
-        addActionBtn(actions, 'Decode access_token', () => {
-          setVal('jwt-token', parsed.access_token);
-          switchTab('jwt');
-          decodeJWT();
-        });
-      }
-
-      if (parsed.id_token) {
-        addActionBtn(actions, 'Decode id_token', () => {
-          setVal('jwt-token', parsed.id_token);
-          switchTab('jwt');
-          decodeJWT();
-        });
-      }
-
-      if (parsed.refresh_token) {
-        addActionBtn(actions, 'Refresh', () => {
-          setVal('ref-refresh-token', parsed.refresh_token);
-          switchTab('refresh');
-        });
-      }
-
-      if (actions.children.length > 0) container.appendChild(actions);
-    } catch (_) {}
+    try { parsed = JSON.parse(result.response.body); } catch (_) {}
   }
 
-  if (result.request) {
-    const section = makeResultSection('Request');
-    const pre = document.createElement('pre');
-    pre.innerHTML = syntaxHighlight(JSON.stringify(result.request, null, 2));
-    section.body.appendChild(pre);
-    section.body.style.display = 'none';
-    container.appendChild(section.el);
+  // Build inner tabs
+  const innerTabs = [];
+
+  if (result.response) {
+    innerTabs.push({
+      label: 'Token Response',
+      build(el) {
+        const status = result.response.status;
+        const statusClass = status >= 500 ? 'status-5xx' : status >= 400 ? 'status-4xx' : 'status-2xx';
+        const badge = document.createElement('span');
+        badge.className = `status-badge ${statusClass}`;
+        badge.textContent = status;
+        badge.style.cssText = 'display:inline-block;margin-bottom:0.5rem';
+        el.appendChild(badge);
+
+        const pre = document.createElement('pre');
+        let bodyStr = result.response.body;
+        try { bodyStr = JSON.stringify(JSON.parse(bodyStr), null, 2); } catch (_) {}
+        pre.innerHTML = syntaxHighlight(bodyStr);
+        el.appendChild(pre);
+
+        if (result.request) {
+          const section = makeResultSection('Request');
+          const reqPre = document.createElement('pre');
+          reqPre.innerHTML = syntaxHighlight(JSON.stringify(result.request, null, 2));
+          section.body.appendChild(reqPre);
+          section.body.style.display = 'none';
+          el.appendChild(section.el);
+        }
+      },
+    });
+  }
+
+  if (parsed?.access_token) {
+    innerTabs.push({
+      label: 'Access Token',
+      async build(el) { await renderJWTInline(el, parsed.access_token); },
+    });
+  }
+
+  if (parsed?.id_token) {
+    innerTabs.push({
+      label: 'ID Token',
+      async build(el) { await renderJWTInline(el, parsed.id_token); },
+    });
+  }
+
+  if (entry.callback_params && Object.keys(entry.callback_params).length > 0) {
+    innerTabs.push({
+      label: 'Auth Response',
+      build(el) {
+        const table = document.createElement('table');
+        table.className = 'params-table';
+        table.innerHTML = '<tr><th>Parameter</th><th>Value</th></tr>';
+        for (const [k, v] of Object.entries(entry.callback_params)) {
+          const row = document.createElement('tr');
+          row.innerHTML = `<td>${escHtml(k)}</td><td style="word-break:break-all">${escHtml(v)}</td>`;
+          table.appendChild(row);
+        }
+        el.appendChild(table);
+      },
+    });
+  }
+
+  if (innerTabs.length > 0) {
+    container.appendChild(makeInnerTabs(innerTabs));
+  }
+
+  // Action buttons
+  if (parsed) {
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem';
+
+    if (parsed.access_token) {
+      addActionBtn(actions, 'UserInfo →', () => {
+        setVal('ui-access-token', parsed.access_token);
+        switchTab('userinfo');
+      });
+      addActionBtn(actions, 'Introspect →', () => {
+        setVal('intr-token', parsed.access_token);
+        switchTab('introspect');
+      });
+    }
+
+    if (parsed.refresh_token) {
+      const refreshBtn = document.createElement('button');
+      refreshBtn.className = 'btn-secondary';
+      refreshBtn.textContent = '↻ Refresh';
+      let refreshContainer = null;
+      refreshBtn.onclick = async () => {
+        if (!refreshContainer) {
+          refreshContainer = document.createElement('div');
+          refreshContainer.style.cssText = 'width:100%;margin-top:0.75rem;border-top:1px solid var(--border);padding-top:0.75rem';
+          actions.after(refreshContainer);
+        } else {
+          refreshContainer.innerHTML = '';
+        }
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = '↻ Refreshing…';
+        await doInlineRefresh(refreshContainer, parsed.refresh_token);
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = '↻ Refresh';
+      };
+      actions.appendChild(refreshBtn);
+    }
+
+    if (actions.children.length > 0) container.appendChild(actions);
+  }
+}
+
+function makeInnerTabs(tabs) {
+  const wrap = document.createElement('div');
+  wrap.className = 'inner-tabs-wrap';
+
+  const nav = document.createElement('div');
+  nav.className = 'inner-tabs';
+
+  const body = document.createElement('div');
+  body.className = 'inner-tabs-body';
+
+  const contentEls = [];
+  const built = new Set();
+
+  tabs.forEach((tab, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'inner-tab-btn' + (i === 0 ? ' active' : '');
+    btn.textContent = tab.label;
+    nav.appendChild(btn);
+
+    const content = document.createElement('div');
+    content.className = 'inner-tab-content' + (i === 0 ? ' active' : '');
+    contentEls.push(content);
+    body.appendChild(content);
+
+    function buildContent() {
+      if (built.has(i)) return;
+      built.add(i);
+      const p = tab.build(content);
+      if (p && p.then) {
+        p.catch(e => {
+          content.innerHTML += `<div style="color:var(--red);font-size:0.85rem">Error: ${escHtml(e.message)}</div>`;
+        });
+      }
+    }
+
+    if (i === 0) buildContent();
+
+    btn.addEventListener('click', () => {
+      nav.querySelectorAll('.inner-tab-btn').forEach(b => b.classList.remove('active'));
+      contentEls.forEach(c => c.classList.remove('active'));
+      btn.classList.add('active');
+      content.classList.add('active');
+      buildContent();
+    });
+  });
+
+  wrap.appendChild(nav);
+  wrap.appendChild(body);
+  return wrap;
+}
+
+async function renderJWTInline(container, token) {
+  try {
+    const res = await fetch('/api/jwt/decode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      container.innerHTML = `<div style="color:var(--red);font-size:0.85rem">${escHtml(data.error)}</div>`;
+      return;
+    }
+    for (const part of ['header', 'payload']) {
+      const section = makeResultSection(part.charAt(0).toUpperCase() + part.slice(1));
+      const pre = document.createElement('pre');
+      pre.innerHTML = syntaxHighlight(JSON.stringify(data[part], null, 2));
+      section.body.appendChild(pre);
+      if (part === 'payload' && data.payload) {
+        const hints = buildTimestampHints(data.payload);
+        if (hints.length) {
+          const hintDiv = document.createElement('div');
+          hintDiv.style.cssText = 'margin-top:0.5rem;font-size:0.8rem;color:var(--text-muted)';
+          hintDiv.innerHTML = hints.map(h => `<div>${escHtml(h)}</div>`).join('');
+          section.body.appendChild(hintDiv);
+        }
+      }
+      container.appendChild(section.el);
+    }
+  } catch (e) {
+    container.innerHTML = `<div style="color:var(--red);font-size:0.85rem">${escHtml(e.message)}</div>`;
+  }
+}
+
+async function doInlineRefresh(container, refreshToken) {
+  try {
+    const res = await fetch('/api/token/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token_url: state.config.token_url,
+        client_id: state.config.client_id,
+        client_secret: state.config.client_secret,
+        refresh_token: refreshToken,
+        extra_params: state.config.extra_token_params || {},
+      }),
+    });
+    const result = await res.json();
+
+    if (result.error) {
+      const errDiv = document.createElement('div');
+      errDiv.style.cssText = 'color:var(--red);background:rgba(248,81,73,0.1);border:1px solid var(--red);border-radius:6px;padding:0.75rem;font-size:0.85rem';
+      errDiv.textContent = result.error;
+      container.appendChild(errDiv);
+      return;
+    }
+
+    let parsed = null;
+    if (result.response) {
+      try { parsed = JSON.parse(result.response.body); } catch (_) {}
+    }
+
+    const innerTabs = [];
+
+    if (result.response) {
+      innerTabs.push({
+        label: 'Token Response',
+        build(el) {
+          const status = result.response.status;
+          const statusClass = status >= 500 ? 'status-5xx' : status >= 400 ? 'status-4xx' : 'status-2xx';
+          const badge = document.createElement('span');
+          badge.className = `status-badge ${statusClass}`;
+          badge.textContent = status;
+          badge.style.cssText = 'display:inline-block;margin-bottom:0.5rem';
+          el.appendChild(badge);
+          const pre = document.createElement('pre');
+          let bodyStr = result.response.body;
+          try { bodyStr = JSON.stringify(JSON.parse(bodyStr), null, 2); } catch (_) {}
+          pre.innerHTML = syntaxHighlight(bodyStr);
+          el.appendChild(pre);
+        },
+      });
+    }
+
+    if (parsed?.access_token) {
+      innerTabs.push({
+        label: 'Access Token',
+        async build(el) { await renderJWTInline(el, parsed.access_token); },
+      });
+    }
+    if (parsed?.id_token) {
+      innerTabs.push({
+        label: 'ID Token',
+        async build(el) { await renderJWTInline(el, parsed.id_token); },
+      });
+    }
+
+    if (innerTabs.length > 0) container.appendChild(makeInnerTabs(innerTabs));
+  } catch (e) {
+    container.innerHTML = `<div style="color:var(--red);font-size:0.85rem">${escHtml(e.message)}</div>`;
   }
 }
 
