@@ -63,6 +63,15 @@ func TestLogout(t *testing.T) {
 					ids["first"] = id
 				}
 			}
+			// The entry whose id_token went as the hint, the only one noted.
+			defer func() {
+				for _, e := range s.history {
+					used := tc.code == http.StatusFound && idTokenOfResult(e.Result) == tc.hint
+					if used != (e.LoggedOutAt != nil) {
+						t.Errorf("entry %s: logged_out_at %v, want it: %v", idTokenOfResult(e.Result), e.LoggedOutAt, used)
+					}
+				}
+			}()
 			target := "/auth/logout"
 			if tc.query != "" {
 				flow := ids[tc.query]

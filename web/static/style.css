@@ -53,6 +53,16 @@ header {
   font-size: 0.85rem;
 }
 
+.session-badge {
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: var(--green);
+}
+
+.session-badge.out {
+  color: var(--text-muted);
+}
+
 /* Tabs */
 .tabs {
   display: flex;

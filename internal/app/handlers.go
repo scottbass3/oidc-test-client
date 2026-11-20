@@ -519,7 +519,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		renderCallbackError(w, "invalid end_session_url: "+err.Error())
 		return
 	}
-	idToken := s.idTokenOf(r.URL.Query().Get("flow"))
+	state, err := generateRandom(16)
+	if err != nil {
+		http.Error(w, "failed to generate state", 500)
+		return
+	}
+	idToken := s.markLogout(r.URL.Query().Get("flow"), time.Now())
 	if idToken == "" {
 		renderCallbackError(w, "no id_token in the history to log out with")
 		return
@@ -528,11 +533,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	params := endSession.Query()
 	params.Set("id_token_hint", idToken)
 	if cfg.PostLogoutRedirectURI != "" {
-		state, err := generateRandom(16)
-		if err != nil {
-			http.Error(w, "failed to generate state", 500)
-			return
-		}
 		params.Set("post_logout_redirect_uri", cfg.PostLogoutRedirectURI)
 		params.Set("state", state)
 	}
@@ -541,19 +541,25 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, endSession.String(), http.StatusFound)
 }
 
-// idTokenOf returns the id_token of the history entry id, or, id empty, of
-// the newest entry that has one.
-func (s *Server) idTokenOf(id string) string {
-	s.historyMu.RLock()
-	defer s.historyMu.RUnlock()
+// markLogout returns the id_token of the history entry id, or, id empty, of
+// the newest entry that has one, and notes on that entry the logout sent at
+// at; "" when there is none.
+func (s *Server) markLogout(id string, at time.Time) string {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
 
 	for i := len(s.history) - 1; i >= 0; i-- {
 		e := s.history[i]
 		if id != "" && e.ID != id {
 			continue
 		}
-		if t := idTokenOfResult(e.Result); t != "" || id != "" {
+		t := idTokenOfResult(e.Result)
+		if t != "" {
+			e.LoggedOutAt = &at
 			return t
+		}
+		if id != "" {
+			return ""
 		}
 	}
 	return ""

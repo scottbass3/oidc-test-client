@@ -22,6 +22,8 @@ type HistoryEntry struct {
 	CreatedAt      time.Time         `json:"created_at"`
 	Result         *OIDCResult       `json:"result"`
 	CallbackParams map[string]string `json:"callback_params,omitempty"`
+	// LoggedOutAt is when a logout was sent with this flow's id_token.
+	LoggedOutAt *time.Time `json:"logged_out_at,omitempty"`
 }
 
 type Server struct {

@@ -12,6 +12,7 @@ const state = {
 document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   loadConfig();
+  refreshSessionBadge();
 
   const params = new URLSearchParams(window.location.search);
   const flowId = params.get('flow');
@@ -491,7 +492,59 @@ async function loadHistory(highlightId) {
     const res = await fetch('/api/history');
     const entries = await res.json();
     renderHistory(entries, highlightId);
+    updateSessionBadge(entries);
   } catch (_) {}
+}
+
+// ── Session badge ─────────────────────────────────────────────────────────────
+
+// The header says who the newest flow with an id_token signed in, and whether
+// a logout was sent with it. It is what this client knows: a logout from
+// another client of the provider does not show here.
+async function refreshSessionBadge() {
+  try {
+    const res = await fetch('/api/history');
+    updateSessionBadge(await res.json());
+  } catch (_) {}
+}
+
+function updateSessionBadge(entries) {
+  const el = document.getElementById('session-badge');
+  if (!el) return;
+  el.textContent = '';
+  el.className = 'session-badge';
+  el.title = '';
+  for (const entry of entries || []) {
+    let idToken = null;
+    try { idToken = JSON.parse(entry.result?.response?.body || '{}').id_token; } catch (_) {}
+    if (!idToken) continue;
+    const claims = jwtPayload(idToken) || {};
+    const who = displayName(claims);
+    if (entry.logged_out_at) {
+      el.textContent = `○ ${who}, logout sent ${new Date(entry.logged_out_at).toLocaleTimeString()}`;
+      el.className = 'session-badge out';
+    } else {
+      el.textContent = `● Signed in as ${who}`;
+    }
+    el.title = `sub ${claims.sub || '?'}, flow ${entry.id}, as this client last saw it`;
+    return;
+  }
+}
+
+function displayName(claims) {
+  const full = [claims.given_name || claims.firstname, claims.family_name || claims.lastname].filter(Boolean).join(' ');
+  return claims.name || full || claims.preferred_username || claims.email || claims.sub || 'unknown';
+}
+
+// jwtPayload decodes the payload of a JWT, unverified; null if it cannot.
+function jwtPayload(token) {
+  try {
+    const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const bytes = Uint8Array.from(atob(part.padEnd(part.length + (4 - part.length % 4) % 4, '=')), c => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch (_) {
+    return null;
+  }
 }
 
 function renderHistory(entries, highlightId) {
