@@ -19,6 +19,11 @@ document.addEventListener('DOMContentLoaded', () => {
     window.history.replaceState({}, '', '/');
     switchTab('history');
     loadHistory(flowId);
+  } else if (params.has('state')) {
+    // Back from the provider after a logout (post_logout_redirect_uri).
+    window.history.replaceState({}, '', '/');
+    switchTab('history');
+    showStatus('history-status', `Back from logout, state ${params.get('state')}`);
   }
 });
 
@@ -62,6 +67,7 @@ function applyConfigToForm(cfg) {
   setVal('cfg-client-id', cfg.client_id);
   setVal('cfg-client-secret', cfg.client_secret);
   setVal('cfg-redirect-uri', cfg.redirect_uri);
+  setVal('cfg-post-logout-redirect-uri', cfg.post_logout_redirect_uri);
   setVal('cfg-scopes', (cfg.scopes || []).join(' '));
   setSelectVal('cfg-response-type', cfg.response_type || 'code');
   setSelectVal('cfg-response-mode', cfg.response_mode || '');
@@ -89,6 +95,7 @@ function readConfigFromForm() {
     client_id: getVal('cfg-client-id'),
     client_secret: getVal('cfg-client-secret'),
     redirect_uri: getVal('cfg-redirect-uri'),
+    post_logout_redirect_uri: getVal('cfg-post-logout-redirect-uri'),
     scopes,
     response_type: getVal('cfg-response-type'),
     response_mode: getVal('cfg-response-mode'),
@@ -627,6 +634,12 @@ function buildHistoryBody(container, entry) {
       addActionBtn(actions, 'Introspect →', () => {
         setVal('intr-token', parsed.access_token);
         switchTab('introspect');
+      });
+    }
+
+    if (parsed.id_token) {
+      addActionBtn(actions, 'Logout →', () => {
+        window.location.href = '/auth/logout?flow=' + encodeURIComponent(entry.id);
       });
     }
 

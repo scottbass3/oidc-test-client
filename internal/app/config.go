@@ -15,9 +15,10 @@ type Config struct {
 	JWKSURI          string `json:"jwks_uri"`
 	EndSessionURL    string `json:"end_session_url"`
 
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-	RedirectURI  string `json:"redirect_uri"`
+	ClientID              string `json:"client_id"`
+	ClientSecret          string `json:"client_secret"`
+	RedirectURI           string `json:"redirect_uri"`
+	PostLogoutRedirectURI string `json:"post_logout_redirect_uri"`
 
 	Scopes       []string `json:"scopes"`
 	ResponseType string   `json:"response_type"`
@@ -93,6 +94,12 @@ func (cs *ConfigStore) loadFromEnv() {
 	}
 	if v := os.Getenv("OIDC_INTROSPECTION_URL"); v != "" {
 		cs.config.IntrospectionURL = v
+	}
+	if v := os.Getenv("OIDC_END_SESSION_URL"); v != "" {
+		cs.config.EndSessionURL = v
+	}
+	if v := os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URI"); v != "" {
+		cs.config.PostLogoutRedirectURI = v
 	}
 }
 

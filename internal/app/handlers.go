@@ -27,6 +27,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/history", s.handleHistory)
 	s.mux.HandleFunc("/auth/start", s.handleAuthStart)
 	s.mux.HandleFunc("/auth/callback", s.handleAuthCallback)
+	s.mux.HandleFunc("/auth/logout", s.handleLogout)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -497,6 +498,79 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	result := exchangeCode(cfg.TokenURL, cfg.ClientID, cfg.ClientSecret, code, cfg.RedirectURI, flowState.CodeVerifier, extra)
 	id := s.addHistory(result, callbackParams)
 	http.Redirect(w, r, "/?flow="+id, http.StatusFound)
+}
+
+// --- Logout ---
+
+// handleLogout starts an RP-initiated logout: the browser goes to the end
+// session endpoint with the id_token of a flow of the history as
+// id_token_hint, the flow named by ?flow=, or the newest with an id_token.
+// With a post-logout redirect URI configured, the provider sends the browser
+// back there with the state.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config.Get()
+
+	if cfg.EndSessionURL == "" {
+		renderCallbackError(w, "end_session_url not configured")
+		return
+	}
+	endSession, err := url.Parse(cfg.EndSessionURL)
+	if err != nil {
+		renderCallbackError(w, "invalid end_session_url: "+err.Error())
+		return
+	}
+	idToken := s.idTokenOf(r.URL.Query().Get("flow"))
+	if idToken == "" {
+		renderCallbackError(w, "no id_token in the history to log out with")
+		return
+	}
+
+	params := endSession.Query()
+	params.Set("id_token_hint", idToken)
+	if cfg.PostLogoutRedirectURI != "" {
+		state, err := generateRandom(16)
+		if err != nil {
+			http.Error(w, "failed to generate state", 500)
+			return
+		}
+		params.Set("post_logout_redirect_uri", cfg.PostLogoutRedirectURI)
+		params.Set("state", state)
+	}
+	endSession.RawQuery = params.Encode()
+
+	http.Redirect(w, r, endSession.String(), http.StatusFound)
+}
+
+// idTokenOf returns the id_token of the history entry id, or, id empty, of
+// the newest entry that has one.
+func (s *Server) idTokenOf(id string) string {
+	s.historyMu.RLock()
+	defer s.historyMu.RUnlock()
+
+	for i := len(s.history) - 1; i >= 0; i-- {
+		e := s.history[i]
+		if id != "" && e.ID != id {
+			continue
+		}
+		if t := idTokenOfResult(e.Result); t != "" || id != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// idTokenOfResult returns the id_token of a token response, "" without one.
+func idTokenOfResult(res *OIDCResult) string {
+	if res == nil || res.Response == nil {
+		return ""
+	}
+	var body struct {
+		IDToken string `json:"id_token"`
+	}
+	if err := json.Unmarshal([]byte(res.Response.Body), &body); err != nil {
+		return ""
+	}
+	return body.IDToken
 }
 
 // --- History ---

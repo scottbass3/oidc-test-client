@@ -13,6 +13,7 @@ A browser-based debugger for OIDC providers and OAuth2 authorization servers.
 - **Introspect**: Token introspection
 - **JWT Decode**: Inspect JWT header/payload/claims (no signature verification)
 - **Full Flow**: Complete browser-redirected auth code flow
+- **Logout**: RP-initiated logout from a flow of the history, its id_token as `id_token_hint`
 
 All operations show the raw HTTP request and response for easy debugging.
 
@@ -50,6 +51,8 @@ Settings are saved to `config.json` in the working directory and persist across 
 | `OIDC_TOKEN_URL` | Token endpoint (overrides discovery) |
 | `OIDC_USERINFO_URL` | UserInfo endpoint (overrides discovery) |
 | `OIDC_INTROSPECTION_URL` | Introspection endpoint (overrides discovery) |
+| `OIDC_END_SESSION_URL` | End session endpoint, for the logout (overrides discovery) |
+| `OIDC_POST_LOGOUT_REDIRECT_URI` | Where the provider sends the browser back after the logout, with `state` (optional) |
 
 ## Startup Script
 
@@ -85,3 +88,14 @@ http://<host>:<port>/auth/callback
 ```
 
 The callback endpoint exchanges the authorization code for tokens and displays the result.
+
+## Logout
+
+In the History tab, **Logout →** sends the browser to the end session endpoint with the flow's `id_token` as `id_token_hint` (OpenID Connect RP-Initiated Logout). With a post logout redirect URI configured, and registered at the provider, it adds `post_logout_redirect_uri` and a `state`; set it to the client's root to land back on the History tab:
+
+```
+http://<host>:<port>/
+```
+
+`GET /auth/logout?flow=<id>` does the same for a flow of the history, or, without `flow`, for the newest one that has an `id_token`.
+

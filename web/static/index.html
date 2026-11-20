@@ -54,6 +54,7 @@
       <div class="panel">
         <h3>Auth Flow History</h3>
         <p class="hint-text">Last 10 completed authorization flows. Click a row to expand.</p>
+        <div id="history-status"></div>
         <div id="history-list"></div>
       </div>
     </div>
@@ -107,6 +108,10 @@
         <div class="form-row">
           <label>Redirect URI</label>
           <input type="text" id="cfg-redirect-uri" placeholder="http://localhost:8080/auth/callback">
+        </div>
+        <div class="form-row">
+          <label>Post Logout Redirect URI</label>
+          <input type="text" id="cfg-post-logout-redirect-uri" placeholder="http://localhost:8080/">
         </div>
       </div>
 
