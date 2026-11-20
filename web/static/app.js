@@ -12,7 +12,6 @@ const state = {
 document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   loadConfig();
-  refreshSessionBadge();
 
   const params = new URLSearchParams(window.location.search);
   const flowId = params.get('flow');
@@ -24,7 +23,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Back from the provider after a logout (post_logout_redirect_uri).
     window.history.replaceState({}, '', '/');
     switchTab('history');
-    showStatus('history-status', `Back from logout, state ${params.get('state')}`);
+    checkLogoutState(params.get('state'));
+  } else {
+    refreshSessionBadge();
   }
 });
 
@@ -515,13 +516,14 @@ function updateSessionBadge(entries) {
   el.className = 'session-badge';
   el.title = '';
   for (const entry of entries || []) {
-    let idToken = null;
-    try { idToken = JSON.parse(entry.result?.response?.body || '{}').id_token; } catch (_) {}
-    if (!idToken) continue;
-    const claims = jwtPayload(idToken) || {};
+    const claims = entry.id_token_claims;
+    if (!claims) continue;
     const who = displayName(claims);
     if (entry.logged_out_at) {
       el.textContent = `○ ${who}, logout sent ${new Date(entry.logged_out_at).toLocaleTimeString()}`;
+      el.className = 'session-badge out';
+    } else if (typeof claims.exp === 'number' && claims.exp * 1000 < Date.now()) {
+      el.textContent = `○ ${who}, id_token expired ${new Date(claims.exp * 1000).toLocaleString()}`;
       el.className = 'session-badge out';
     } else {
       el.textContent = `● Signed in as ${who}`;
@@ -536,15 +538,35 @@ function displayName(claims) {
   return claims.name || full || claims.preferred_username || claims.email || claims.sub || 'unknown';
 }
 
-// jwtPayload decodes the payload of a JWT, unverified; null if it cannot.
-function jwtPayload(token) {
+// checkLogoutState says whether the state back from the provider is the one
+// sent with a logout of the history.
+async function checkLogoutState(returned) {
   try {
-    const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    const bytes = Uint8Array.from(atob(part.padEnd(part.length + (4 - part.length % 4) % 4, '=')), c => c.charCodeAt(0));
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch (_) {
-    return null;
+    const res = await fetch('/api/history');
+    const entry = (await res.json()).find(e => e.logout_state && e.logout_state === returned);
+    if (entry) {
+      showStatus('history-status', `Back from logout of flow ${entry.id}, state matches`);
+    } else {
+      showStatus('history-status', `Back from logout, state "${returned}" matches no logout sent`, true);
+    }
+  } catch (e) {
+    showStatus('history-status', 'Failed to check the logout state: ' + e.message, true);
   }
+}
+
+// postLogout submits the logout as a form POST, so the browser follows the
+// redirect to the end session endpoint.
+function postLogout(flowId) {
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = '/auth/logout';
+  const input = document.createElement('input');
+  input.type = 'hidden';
+  input.name = 'flow';
+  input.value = flowId;
+  form.appendChild(input);
+  document.body.appendChild(form);
+  form.submit();
 }
 
 function renderHistory(entries, highlightId) {
@@ -691,9 +713,7 @@ function buildHistoryBody(container, entry) {
     }
 
     if (parsed.id_token) {
-      addActionBtn(actions, 'Logout →', () => {
-        window.location.href = '/auth/logout?flow=' + encodeURIComponent(entry.id);
-      });
+      addActionBtn(actions, 'Logout →', () => postLogout(entry.id));
     }
 
     if (parsed.refresh_token) {

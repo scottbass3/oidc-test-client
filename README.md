@@ -91,11 +91,11 @@ The callback endpoint exchanges the authorization code for tokens and displays t
 
 ## Logout
 
-In the History tab, **Logout →** sends the browser to the end session endpoint with the flow's `id_token` as `id_token_hint` (OpenID Connect RP-Initiated Logout). With a post logout redirect URI configured, and registered at the provider, it adds `post_logout_redirect_uri` and a `state`; set it to the client's root to land back on the History tab:
+In the History tab, **Logout →** sends the browser to the end session endpoint with the flow's `id_token` as `id_token_hint` (OpenID Connect RP-Initiated Logout). With a post logout redirect URI configured, and registered at the provider, it adds `post_logout_redirect_uri` and a `state`, kept on the flow; set it to the client's root to land back on the History tab, which checks the `state` that comes back against it:
 
 ```
 http://<host>:<port>/
 ```
 
-`GET /auth/logout?flow=<id>` does the same for a flow of the history, or, without `flow`, for the newest one that has an `id_token`.
+`POST /auth/logout` with a `flow=<id>` form field does the same for a flow of the history, or, without `flow`, for the newest one that has an `id_token`. It refuses requests from another site (`Sec-Fetch-Site`, or `Origin` for browsers without it).
 

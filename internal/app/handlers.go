@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -504,10 +505,19 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 // handleLogout starts an RP-initiated logout: the browser goes to the end
 // session endpoint with the id_token of a flow of the history as
-// id_token_hint, the flow named by ?flow=, or the newest with an id_token.
+// id_token_hint, the flow named by flow, or the newest with an id_token.
 // With a post-logout redirect URI configured, the provider sends the browser
-// back there with the state.
+// back there with the state, kept on the flow to check it.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(405)
+		return
+	}
+	if !sameOrigin(r) {
+		http.Error(w, "cross-origin logout refused", http.StatusForbidden)
+		return
+	}
 	cfg := s.config.Get()
 
 	if cfg.EndSessionURL == "" {
@@ -519,20 +529,22 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		renderCallbackError(w, "invalid end_session_url: "+err.Error())
 		return
 	}
-	state, err := generateRandom(16)
-	if err != nil {
-		http.Error(w, "failed to generate state", 500)
-		return
+	var state string
+	if cfg.PostLogoutRedirectURI != "" {
+		if state, err = generateRandom(16); err != nil {
+			http.Error(w, "failed to generate state", 500)
+			return
+		}
 	}
-	idToken := s.markLogout(r.URL.Query().Get("flow"), time.Now())
-	if idToken == "" {
-		renderCallbackError(w, "no id_token in the history to log out with")
+	idToken, err := s.markLogout(r.FormValue("flow"), state, time.Now())
+	if err != nil {
+		renderCallbackError(w, err.Error())
 		return
 	}
 
 	params := endSession.Query()
 	params.Set("id_token_hint", idToken)
-	if cfg.PostLogoutRedirectURI != "" {
+	if state != "" {
 		params.Set("post_logout_redirect_uri", cfg.PostLogoutRedirectURI)
 		params.Set("state", state)
 	}
@@ -541,10 +553,29 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, endSession.String(), http.StatusFound)
 }
 
+// sameOrigin reports whether r comes from a page of this client. Browsers send
+// Sec-Fetch-Site, older ones only Origin; a request with neither is not a
+// cross-site browser request.
+func sameOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		return true
+	case "":
+	default:
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && u.Host == r.Host
+}
+
 // markLogout returns the id_token of the history entry id, or, id empty, of
 // the newest entry that has one, and notes on that entry the logout sent at
-// at; "" when there is none.
-func (s *Server) markLogout(id string, at time.Time) string {
+// at with state.
+func (s *Server) markLogout(id, state string, at time.Time) (string, error) {
 	s.historyMu.Lock()
 	defer s.historyMu.Unlock()
 
@@ -554,15 +585,33 @@ func (s *Server) markLogout(id string, at time.Time) string {
 			continue
 		}
 		t := idTokenOfResult(e.Result)
-		if t != "" {
-			e.LoggedOutAt = &at
-			return t
+		if t == "" {
+			if id != "" {
+				return "", fmt.Errorf("flow %s has no id_token", id)
+			}
+			continue
 		}
-		if id != "" {
-			return ""
-		}
+		e.LoggedOutAt = &at
+		e.LogoutState = state
+		return t, nil
 	}
-	return ""
+	if id != "" {
+		return "", fmt.Errorf("flow %s is not in the history, which keeps the last %d", id, maxHistory)
+	}
+	return "", fmt.Errorf("no id_token in the history to log out with")
+}
+
+// idTokenClaims returns the unverified payload of an id_token, nil without one.
+func idTokenClaims(token string) map[string]interface{} {
+	if token == "" {
+		return nil
+	}
+	jwt, err := decodeJWT(token)
+	if err != nil {
+		return nil
+	}
+	claims, _ := jwt["payload"].(map[string]interface{})
+	return claims
 }
 
 // idTokenOfResult returns the id_token of a token response, "" without one.
@@ -629,7 +678,7 @@ a{color:#58a6ff}
 <div class="error">%s</div>
 <p><a href="/">← Back to OIDC Test Client</a></p>
 </body>
-</html>`, msg)
+</html>`, html.EscapeString(msg))
 }
 
 

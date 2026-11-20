@@ -22,8 +22,12 @@ type HistoryEntry struct {
 	CreatedAt      time.Time         `json:"created_at"`
 	Result         *OIDCResult       `json:"result"`
 	CallbackParams map[string]string `json:"callback_params,omitempty"`
-	// LoggedOutAt is when a logout was sent with this flow's id_token.
+	// IDTokenClaims is the unverified payload of the flow's id_token.
+	IDTokenClaims map[string]interface{} `json:"id_token_claims,omitempty"`
+	// LoggedOutAt is when a logout was sent with this flow's id_token, and
+	// LogoutState the state sent with it, to check the one coming back.
 	LoggedOutAt *time.Time `json:"logged_out_at,omitempty"`
+	LogoutState string     `json:"logout_state,omitempty"`
 }
 
 type Server struct {
@@ -49,11 +53,11 @@ func New(opts Options) *Server {
 		staticFS:   opts.StaticFS,
 	}
 	s.registerRoutes()
-	go s.cleanFlowStates()
 	return s
 }
 
 func (s *Server) Start(addr string) error {
+	go s.cleanFlowStates()
 	return http.ListenAndServe(addr, s.mux)
 }
 
@@ -64,6 +68,7 @@ func (s *Server) addHistory(result *OIDCResult, callbackParams map[string]string
 		CreatedAt:      time.Now(),
 		Result:         result,
 		CallbackParams: callbackParams,
+		IDTokenClaims:  idTokenClaims(idTokenOfResult(result)),
 	}
 	s.historyMu.Lock()
 	s.history = append(s.history, entry)
