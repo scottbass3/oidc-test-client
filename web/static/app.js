@@ -11,6 +11,7 @@ const state = {
 
 document.addEventListener('DOMContentLoaded', () => {
   initTabs();
+  initActions();
   loadConfig();
 
   const params = new URLSearchParams(window.location.search);
@@ -43,6 +44,34 @@ function initTabs() {
   });
 }
 
+// The buttons of the page name their action in data-action, and the field it
+// works on in data-target: no inline handler, so that the page runs under a
+// Content-Security-Policy without 'unsafe-inline'.
+const actions = {
+  'start-flow': () => startFlow(),
+  'discover-update': () => discoverAndUpdate(),
+  'save-config': () => saveConfig(),
+  'discover': () => runDiscovery(false),
+  'discover-update-config': () => runDiscovery(true),
+  'toggle-secret': btn => toggleSecret(btn.dataset.target),
+  'gen-random': btn => genRandom(btn.dataset.target, 16),
+  'generate-pkce': () => generatePKCE(),
+  'copy-field': btn => copyField(btn.dataset.target),
+  'build-authorize-url': () => buildAuthorizeURL(),
+  'copy-verifier': () => copyFromAuthorize(),
+  'exchange-token': () => exchangeToken(),
+  'refresh-token': () => doRefresh(),
+  'userinfo': () => fetchUserInfo(),
+  'introspect': () => doIntrospect(),
+  'decode-jwt': () => decodeJWT(),
+};
+
+function initActions() {
+  document.querySelectorAll('[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => actions[btn.dataset.action](btn));
+  });
+}
+
 // ── Config ───────────────────────────────────────────────────────────────────
 
 async function loadConfig() {
@@ -50,12 +79,30 @@ async function loadConfig() {
     const res = await fetch('/api/config');
     const cfg = await res.json();
     state.config = cfg;
+    applyLocked(cfg.locked);
     applyConfigToForm(cfg);
     prefillFromConfig();
     renderFlowPreview();
   } catch (e) {
     showStatus('config-status', 'Failed to load config: ' + e.message, true);
   }
+}
+
+// In locked mode the provider and the client are fixed on the server: their
+// fields (data-fixed) only show them, and the buttons that would change them
+// go. The server ignores them anyway.
+function applyLocked(locked) {
+  document.getElementById('locked-badge').hidden = !locked;
+  document.getElementById('locked-note').hidden = !locked;
+  if (!locked) return;
+  document.querySelectorAll('[data-fixed]').forEach(el => {
+    if (el.tagName === 'BUTTON') {
+      el.hidden = true;
+    } else {
+      el.disabled = true;
+      if (el.type === 'password') el.placeholder = 'set on the server';
+    }
+  });
 }
 
 function applyConfigToForm(cfg) {
@@ -108,8 +155,15 @@ function readConfigFromForm() {
   };
 }
 
+// The settings a tester tunes in locked mode, the only ones sent then.
+const tunables = ['scopes', 'response_type', 'response_mode', 'pkce_enabled', 'pkce_method',
+  'extra_authorize_params', 'extra_token_params'];
+
 async function saveConfig() {
-  const cfg = readConfigFromForm();
+  let cfg = readConfigFromForm();
+  if (state.config.locked) {
+    cfg = Object.fromEntries(tunables.map(k => [k, cfg[k]]));
+  }
   try {
     const res = await fetch('/api/config', {
       method: 'POST',
@@ -117,6 +171,10 @@ async function saveConfig() {
       body: JSON.stringify(cfg),
     });
     const saved = await res.json();
+    if (!res.ok) {
+      showStatus('config-status', 'Error: ' + (saved.error || res.status), true);
+      return;
+    }
     state.config = saved;
     prefillFromConfig();
     showStatus('config-status', 'Saved ✓');
@@ -253,8 +311,13 @@ async function buildAuthorizeURL() {
     // URL display
     const urlDiv = document.createElement('div');
     urlDiv.className = 'url-display';
-    urlDiv.innerHTML = `<span>${escHtml(data.url)}</span>
-      <button class="copy-btn" onclick="copyText(${JSON.stringify(data.url)})">Copy</button>`;
+    const urlSpan = document.createElement('span');
+    urlSpan.textContent = data.url;
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'copy-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', () => copyText(data.url));
+    urlDiv.append(urlSpan, copyBtn);
     el.appendChild(urlDiv);
 
     // Params table
@@ -477,7 +540,7 @@ function renderFlowPreview() {
     row.className = 'cfg-row';
     const missing = !val;
     row.innerHTML = `<span class="cfg-key">${key}</span>
-      <span class="cfg-val ${missing ? 'missing' : 'ok'}">${val || '⚠ not set'}</span>`;
+      <span class="cfg-val ${missing ? 'missing' : 'ok'}">${escHtml(val || '⚠ not set')}</span>`;
     el.appendChild(row);
   }
 }
@@ -573,7 +636,7 @@ function renderHistory(entries, highlightId) {
   const el = document.getElementById('history-list');
   el.innerHTML = '';
   if (!entries || entries.length === 0) {
-    el.innerHTML = '<p style="color:var(--text-muted);margin:0">No flows yet. Use Full Flow or Authorize → Open in Browser to start one.</p>';
+    el.innerHTML = '<p class="empty-note">No flows yet. Use Full Flow or Authorize → Open in Browser to start one.</p>';
     return;
   }
   for (const entry of entries) {
@@ -592,7 +655,7 @@ function renderHistoryEntry(container, entry, expanded) {
 
   const header = document.createElement('div');
   header.style.cssText = 'padding:0.6rem 1rem;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:var(--bg3);user-select:none';
-  header.innerHTML = `<span>${dot} ${escHtml(ts)}</span><span style="color:var(--text-muted);font-size:0.8rem">${escHtml(entry.id)}</span>`;
+  header.innerHTML = `<span>${dot} ${escHtml(ts)}</span><span class="history-id">${escHtml(entry.id)}</span>`;
 
   const body = document.createElement('div');
   body.style.cssText = 'padding:0.75rem 1rem 1rem';
@@ -684,7 +747,7 @@ function buildHistoryBody(container, entry) {
         table.innerHTML = '<tr><th>Parameter</th><th>Value</th></tr>';
         for (const [k, v] of Object.entries(entry.callback_params)) {
           const row = document.createElement('tr');
-          row.innerHTML = `<td>${escHtml(k)}</td><td style="word-break:break-all">${escHtml(v)}</td>`;
+          row.innerHTML = `<td>${escHtml(k)}</td><td class="break-all">${escHtml(v)}</td>`;
           table.appendChild(row);
         }
         el.appendChild(table);
@@ -772,7 +835,7 @@ function makeInnerTabs(tabs) {
       const p = tab.build(content);
       if (p && p.then) {
         p.catch(e => {
-          content.innerHTML += `<div style="color:var(--red);font-size:0.85rem">Error: ${escHtml(e.message)}</div>`;
+          content.innerHTML += `<div class="inline-error">Error: ${escHtml(e.message)}</div>`;
         });
       }
     }
@@ -802,7 +865,7 @@ async function renderJWTInline(container, token) {
     });
     const data = await res.json();
     if (data.error) {
-      container.innerHTML = `<div style="color:var(--red);font-size:0.85rem">${escHtml(data.error)}</div>`;
+      container.innerHTML = `<div class="inline-error">${escHtml(data.error)}</div>`;
       return;
     }
     for (const part of ['header', 'payload']) {
@@ -822,7 +885,7 @@ async function renderJWTInline(container, token) {
       container.appendChild(section.el);
     }
   } catch (e) {
-    container.innerHTML = `<div style="color:var(--red);font-size:0.85rem">${escHtml(e.message)}</div>`;
+    container.innerHTML = `<div class="inline-error">${escHtml(e.message)}</div>`;
   }
 }
 
@@ -891,7 +954,7 @@ async function doInlineRefresh(container, refreshToken) {
 
     if (innerTabs.length > 0) container.appendChild(makeInnerTabs(innerTabs));
   } catch (e) {
-    container.innerHTML = `<div style="color:var(--red);font-size:0.85rem">${escHtml(e.message)}</div>`;
+    container.innerHTML = `<div class="inline-error">${escHtml(e.message)}</div>`;
   }
 }
 
@@ -1007,7 +1070,7 @@ function storeTokensFromResult(result) {
 function renderError(elId, msg) {
   const el = document.getElementById(elId);
   el.classList.remove('hidden');
-  el.innerHTML = `<div style="color:var(--red);font-family:var(--font-mono);padding:0.75rem">${escHtml(msg)}</div>`;
+  el.innerHTML = `<div class="result-error">${escHtml(msg)}</div>`;
 }
 
 function makeResultSection(title, badgeHtml = '') {

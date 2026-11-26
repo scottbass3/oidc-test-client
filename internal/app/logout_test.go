@@ -72,7 +72,7 @@ func TestLogout(t *testing.T) {
 			s := newTestServer(t, tc.cfg)
 			ids := map[string]string{}
 			for i, res := range tc.history {
-				id := s.addHistory(res, nil)
+				id := s.shared.addHistory(res, nil)
 				if i == 0 {
 					ids["first"] = id
 				}
@@ -81,7 +81,7 @@ func TestLogout(t *testing.T) {
 			// with the state sent.
 			var sentState string
 			defer func() {
-				for _, e := range s.history {
+				for _, e := range s.shared.history {
 					used := tc.code == http.StatusFound && idTokenOfResult(e.Result) == tc.hint
 					if used != (e.LoggedOutAt != nil) {
 						t.Errorf("entry %s: logged_out_at %v, want it: %v", idTokenOfResult(e.Result), e.LoggedOutAt, used)
@@ -109,7 +109,7 @@ func TestLogout(t *testing.T) {
 				req.Header.Set(k, v)
 			}
 			rec := httptest.NewRecorder()
-			s.mux.ServeHTTP(rec, req)
+			s.ServeHTTP(rec, req)
 			if rec.Code != tc.code {
 				t.Fatalf("status %d, want %d: %s", rec.Code, tc.code, rec.Body)
 			}
@@ -149,12 +149,12 @@ func TestRenderCallbackErrorEscapes(t *testing.T) {
 func TestHistoryIDTokenClaims(t *testing.T) {
 	s := newTestServer(t, Config{})
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"alice","exp":1}`))
-	s.addHistory(tokenResult(`{"id_token":"e30.`+payload+`.sig"}`), nil)
-	s.addHistory(tokenResult(`{"access_token":"a"}`), nil)
-	if got := s.history[0].IDTokenClaims["sub"]; got != "alice" {
+	s.shared.addHistory(tokenResult(`{"id_token":"e30.`+payload+`.sig"}`), nil)
+	s.shared.addHistory(tokenResult(`{"access_token":"a"}`), nil)
+	if got := s.shared.history[0].IDTokenClaims["sub"]; got != "alice" {
 		t.Errorf("claims sub %v, want alice", got)
 	}
-	if got := s.history[1].IDTokenClaims; got != nil {
+	if got := s.shared.history[1].IDTokenClaims; got != nil {
 		t.Errorf("claims %v without an id_token, want none", got)
 	}
 }

@@ -47,14 +47,58 @@ type ConfigStore struct {
 	filepath string
 }
 
-func NewConfigStore(filepath string) *ConfigStore {
+// NewConfigStore reads the configuration from the file, then the environment.
+// Locked, the file is left out: the provider and the client come from the
+// environment only.
+func NewConfigStore(filepath string, locked bool) *ConfigStore {
 	cs := &ConfigStore{
 		config:   defaultConfig(),
 		filepath: filepath,
 	}
-	cs.loadFromFile()
+	if !locked {
+		cs.loadFromFile()
+	}
 	cs.loadFromEnv()
 	return cs
+}
+
+// setTunables copies from from the settings a tester tunes in locked mode,
+// the ones that are not part of the provider or of the client's registration.
+func (c *Config) setTunables(from Config) {
+	c.Scopes = from.Scopes
+	c.ResponseType = from.ResponseType
+	c.ResponseMode = from.ResponseMode
+	c.PKCEEnabled = from.PKCEEnabled
+	c.PKCEMethod = from.PKCEMethod
+	c.ExtraAuthorizeParams = from.ExtraAuthorizeParams
+	c.ExtraTokenParams = from.ExtraTokenParams
+}
+
+// lockedChange names the first field of posted that locked mode refuses, ""
+// when there is none: a provider endpoint or a client field that differs from
+// the fixed one, or any client secret, so that the answer does not tell
+// whether a guess is right. An empty field asks for no change.
+func lockedChange(posted, fixed Config) string {
+	if posted.ClientSecret != "" {
+		return "client_secret"
+	}
+	for _, f := range []struct{ name, posted, fixed string }{
+		{"issuer_url", posted.IssuerURL, fixed.IssuerURL},
+		{"authorization_url", posted.AuthorizationURL, fixed.AuthorizationURL},
+		{"token_url", posted.TokenURL, fixed.TokenURL},
+		{"userinfo_url", posted.UserinfoURL, fixed.UserinfoURL},
+		{"introspection_url", posted.IntrospectionURL, fixed.IntrospectionURL},
+		{"jwks_uri", posted.JWKSURI, fixed.JWKSURI},
+		{"end_session_url", posted.EndSessionURL, fixed.EndSessionURL},
+		{"client_id", posted.ClientID, fixed.ClientID},
+		{"redirect_uri", posted.RedirectURI, fixed.RedirectURI},
+		{"post_logout_redirect_uri", posted.PostLogoutRedirectURI, fixed.PostLogoutRedirectURI},
+	} {
+		if f.posted != "" && f.posted != f.fixed {
+			return f.name
+		}
+	}
+	return ""
 }
 
 func (cs *ConfigStore) Get() Config {
@@ -94,6 +138,9 @@ func (cs *ConfigStore) loadFromEnv() {
 	}
 	if v := os.Getenv("OIDC_INTROSPECTION_URL"); v != "" {
 		cs.config.IntrospectionURL = v
+	}
+	if v := os.Getenv("OIDC_JWKS_URI"); v != "" {
+		cs.config.JWKSURI = v
 	}
 	if v := os.Getenv("OIDC_END_SESSION_URL"); v != "" {
 		cs.config.EndSessionURL = v
