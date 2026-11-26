@@ -237,7 +237,9 @@ async function discoverAndUpdate() {
 async function runDiscovery(updateConfig) {
   const issuerURL = getVal('disc-issuer-url');
   if (!issuerURL) {
-    alert('Enter an Issuer URL');
+    // Locked, the field is fixed: there is nothing to enter.
+    if (state.config.locked) renderError('disc-result', 'No issuer URL is set on the server (OIDC_ISSUER_URL).');
+    else alert('Enter an Issuer URL');
     return;
   }
   try {
@@ -300,6 +302,10 @@ async function buildAuthorizeURL() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
+    if (!res.ok) {
+      renderError('auth-result', data.error || 'HTTP ' + res.status);
+      return;
+    }
 
     // Reflect auto-generated state/nonce back into the fields so the user
     // can see what was used and copy it if needed.

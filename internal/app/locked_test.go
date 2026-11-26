@@ -420,7 +420,7 @@ func TestSecurityHeaders(t *testing.T) {
 			h := rec.Header()
 			wantCSP, wantRef, wantCache := "", "", ""
 			if locked {
-				wantCSP, wantRef = "default-src 'self'; frame-ancestors 'none'", "no-referrer"
+				wantCSP, wantRef = "default-src 'self'; frame-ancestors 'none'", "same-origin"
 				if path != "/" {
 					wantCache = "no-store"
 				}
@@ -633,30 +633,50 @@ func TestLockedBounds(t *testing.T) {
 		t.Errorf("a body over the limit: status %d, want 400", rec.Code)
 	}
 
-	// With maxSessions live, no other opens, but the config is still served;
-	// an expired session leaves its place.
+	// With maxSessions live, a new session takes the place of the one that
+	// loses least: one that keeps nothing, then the one seen longest ago
+	// among those without a history.
+	carol, idle := &browser{t: t, s: s}, &browser{t: t, s: s}
+	carol.flow("carol")
+	idle.do(http.MethodGet, "/api/config", "")
 	for sessions() < maxSessions {
 		(&browser{t: t, s: s}).start()
 	}
+	live := func(b *browser) bool {
+		s.sessionsMu.Lock()
+		defer s.sessionsMu.Unlock()
+		_, ok := s.sessions[b.cookie.Value]
+		return ok
+	}
+	age := func(b *browser, d time.Duration) {
+		s.sessionsMu.Lock()
+		s.sessions[b.cookie.Value].seen = time.Now().Add(-d)
+		s.sessionsMu.Unlock()
+	}
+	age(carol, 2*time.Hour)
+	age(alice, time.Hour)
 	late := &browser{t: t, s: s}
-	if rec := late.do(http.MethodGet, "/auth/start", ""); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("/auth/start with the sessions full: status %d, want 503", rec.Code)
-	}
-	if rec := late.do(http.MethodPost, "/api/config", `{"scopes":["openid"]}`); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("saving with the sessions full: status %d, want 503", rec.Code)
-	}
-	if rec := late.do(http.MethodGet, "/api/config", ""); rec.Code != 200 || late.cookie != nil {
-		t.Errorf("config with the sessions full: status %d, cookie %v, want it served without a session", rec.Code, late.cookie)
-	}
-	if n := sessions(); n != maxSessions {
-		t.Errorf("%d sessions, want %d", n, maxSessions)
-	}
-	s.sessionsMu.Lock()
-	s.sessions[alice.cookie.Value].seen = time.Now().Add(-s.sessionTTL)
-	s.sessionsMu.Unlock()
 	late.start()
-	if late.cookie == nil || sessions() != maxSessions {
-		t.Errorf("an expired session did not leave its place: cookie %v, %d sessions", late.cookie, sessions())
+	if late.cookie == nil || sessions() != maxSessions || live(idle) || !live(alice) || !live(carol) {
+		t.Errorf("sessions full: cookie %v, %d sessions, idle live %v, alice %v, carol %v, want the empty one gone",
+			late.cookie, sessions(), live(idle), live(alice), live(carol))
+	}
+	later := &browser{t: t, s: s}
+	if rec := later.do(http.MethodPost, "/api/config", `{"scopes":["openid"]}`); rec.Code != 200 {
+		t.Errorf("saving with the sessions full: status %d, want 200", rec.Code)
+	}
+	if sessions() != maxSessions || live(alice) || !live(carol) || !live(late) {
+		t.Errorf("sessions full again: %d sessions, alice live %v, carol %v, late %v, want the oldest without a history gone",
+			sessions(), live(alice), live(carol), live(late))
+	}
+
+	// An expired session leaves its place first.
+	age(carol, s.sessionTTL)
+	last := &browser{t: t, s: s}
+	last.do(http.MethodGet, "/api/config", "")
+	if last.cookie == nil || sessions() != maxSessions || live(carol) || !live(later) {
+		t.Errorf("an expired session did not leave its place: cookie %v, %d sessions, carol live %v, later %v",
+			last.cookie, sessions(), live(carol), live(later))
 	}
 }
 
@@ -706,15 +726,21 @@ func TestLockedPartialSettings(t *testing.T) {
 func TestFormPost(t *testing.T) {
 	p := newProvider(t)
 	locked := &browser{t: t, s: newLockedServer(t, p)}
-	for path, body := range map[string]string{
-		"/api/config":        `{"response_mode":"form_post"}`,
-		"/api/authorize-url": `{"response_mode":"form_post"}`,
+	// As the response mode, and as the extra parameter that replaces it.
+	for _, tc := range []struct{ path, body string }{
+		{"/api/config", `{"response_mode":"form_post"}`},
+		{"/api/config", `{"extra_authorize_params":{"response_mode":"form_post"}}`},
+		{"/api/authorize-url", `{"response_mode":"form_post"}`},
+		{"/api/authorize-url", `{"response_mode":"query","extra_params":{"response_mode":"form_post"}}`},
 	} {
 		var out map[string]string
-		locked.json(http.MethodPost, path, body, http.StatusBadRequest, &out)
+		locked.json(http.MethodPost, tc.path, tc.body, http.StatusBadRequest, &out)
 		if !strings.Contains(out["error"], "form_post") {
-			t.Errorf("%s: error %q, want form_post refused", path, out["error"])
+			t.Errorf("%s %s: error %q, want form_post refused", tc.path, tc.body, out["error"])
 		}
+	}
+	if h := locked.history(); locked.cookie != nil || len(h) != 0 {
+		t.Errorf("a refused form_post opened a session: %v", locked.cookie)
 	}
 
 	s := newTestServer(t, Config{

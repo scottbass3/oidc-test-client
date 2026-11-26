@@ -102,13 +102,13 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": field + " is fixed in locked mode"})
 		return
 	}
-	if err := s.checkResponseMode(c.ResponseMode); err != nil {
+	if err := s.checkResponseMode(c.ResponseMode, c.ExtraAuthorizeParams); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
 	sess, err := s.openSession(w, r)
 	if err != nil {
-		writeSessionError(w, err)
+		writeJSON(w, 500, map[string]string{"error": "failed to open a session: " + err.Error()})
 		return
 	}
 	sess.mu.Lock()
@@ -117,23 +117,20 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.configView(s.configFor(sess)))
 }
 
-// checkResponseMode refuses form_post in locked mode: the provider's POST
-// comes from another site, so without the session cookie, which is
-// SameSite=Lax, and its state could never be found.
-func (s *Server) checkResponseMode(mode string) error {
-	if s.locked && mode == "form_post" {
-		return errors.New("response_mode form_post is not supported in locked mode: the callback would come without the session cookie")
+// checkResponseMode refuses form_post in locked mode, as the response mode or
+// as the extra parameter that would replace it: the provider's POST comes
+// from another site, so without the session cookie, which is SameSite=Lax,
+// and its state could never be found.
+func (s *Server) checkResponseMode(mode string, extra map[string]string) error {
+	if !s.locked {
+		return nil
+	}
+	for _, m := range []string{mode, extra["response_mode"]} {
+		if m == "form_post" || m == "form_post.jwt" {
+			return errors.New("response_mode " + m + " is not supported in locked mode: the callback would come without the session cookie")
+		}
 	}
 	return nil
-}
-
-// writeSessionError answers a request that could not open its session.
-func writeSessionError(w http.ResponseWriter, err error) {
-	status := http.StatusInternalServerError
-	if errors.Is(err, errTooManySessions) {
-		status = http.StatusServiceUnavailable
-	}
-	writeJSON(w, status, map[string]string{"error": "failed to open a session: " + err.Error()})
 }
 
 // authorizeExtras and tokenExtras return the extra parameters to send: locked,
@@ -255,7 +252,8 @@ func (s *Server) handleAuthorizeURL(w http.ResponseWriter, r *http.Request) {
 	redirectURI := coalesce(req.RedirectURI, cfg.RedirectURI)
 	responseType := coalesce(req.ResponseType, cfg.ResponseType, "code")
 	responseMode := coalesce(req.ResponseMode, cfg.ResponseMode)
-	if err := s.checkResponseMode(responseMode); err != nil {
+	extras := s.authorizeExtras(mergeParams(cfg.ExtraAuthorizeParams, req.ExtraParams))
+	if err := s.checkResponseMode(responseMode, extras); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
@@ -289,7 +287,7 @@ func (s *Server) handleAuthorizeURL(w http.ResponseWriter, r *http.Request) {
 	// Register the state so /auth/callback can complete the exchange.
 	sess, err := s.openSession(w, r)
 	if err != nil {
-		writeSessionError(w, err)
+		writeJSON(w, 500, map[string]string{"error": "failed to open a session: " + err.Error()})
 		return
 	}
 	sess.addState(&FlowState{
@@ -316,7 +314,7 @@ func (s *Server) handleAuthorizeURL(w http.ResponseWriter, r *http.Request) {
 		params.Set("code_challenge_method", method)
 	}
 
-	for k, v := range s.authorizeExtras(mergeParams(cfg.ExtraAuthorizeParams, req.ExtraParams)) {
+	for k, v := range extras {
 		params.Set(k, v)
 	}
 
@@ -537,6 +535,10 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "redirect_uri not configured", 400)
 		return
 	}
+	if err := s.checkResponseMode(cfg.ResponseMode, cfg.ExtraAuthorizeParams); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 
 	state, err := generateRandom(16)
 	if err != nil {
@@ -587,11 +589,7 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 	// The session opens last, once the request is known to start a flow.
 	sess, err := s.openSession(w, r)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, errTooManySessions) {
-			status = http.StatusServiceUnavailable
-		}
-		http.Error(w, "failed to open a session: "+err.Error(), status)
+		http.Error(w, "failed to open a session: "+err.Error(), 500)
 		return
 	}
 	sess.addState(flowState)

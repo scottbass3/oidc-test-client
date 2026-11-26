@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -21,9 +20,10 @@ const (
 	DefaultSessionTTL = 12 * time.Hour
 
 	// What anyone who reaches a locked instance can have it keep is bounded:
-	// maxSessions sessions, maxStates pending states in each, and requests
-	// whose body, the settings a session keeps included, is at most
-	// maxLockedBody bytes.
+	// maxSessions sessions, a new one taking the place of the one that loses
+	// least past that, maxStates pending states in each, and requests whose
+	// body, the settings a session keeps included, is at most maxLockedBody
+	// bytes.
 	maxSessions   = 1000
 	maxStates     = 20
 	maxLockedBody = 64 << 10
@@ -135,7 +135,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.locked {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
-		h.Set("Referrer-Policy", "no-referrer")
+		// same-origin, not no-referrer, which would have the page's own form
+		// POST, the logout, sent with "Origin: null" and so taken for
+		// cross-origin where Sec-Fetch-Site is missing. The provider gets no
+		// referrer either way.
+		h.Set("Referrer-Policy", "same-origin")
 		api := strings.HasPrefix(r.URL.Path, "/api/")
 		if api || strings.HasPrefix(r.URL.Path, "/auth/") {
 			h.Set("Cache-Control", "no-store")
@@ -169,12 +173,10 @@ func (s *Server) session(r *http.Request) *session {
 	return newSession()
 }
 
-// errTooManySessions is openSession's when maxSessions are live.
-var errTooManySessions = errors.New("too many sessions, try again later")
-
 // openSession is session for the requests that store something: locked, a
-// browser without a session gets one, and the cookie that names it, unless
-// maxSessions are live already.
+// browser without a session gets one, and the cookie that names it. With
+// maxSessions live already, it takes the place of another: filling the
+// sessions keeps no one out.
 func (s *Server) openSession(w http.ResponseWriter, r *http.Request) (*session, error) {
 	if !s.locked {
 		return s.shared, nil
@@ -192,14 +194,11 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) (*session, 
 	if len(s.sessions) >= maxSessions {
 		s.dropExpired(sess.seen)
 	}
-	full := len(s.sessions) >= maxSessions
-	if !full {
-		s.sessions[id] = sess
+	if len(s.sessions) >= maxSessions {
+		s.evict()
 	}
+	s.sessions[id] = sess
 	s.sessionsMu.Unlock()
-	if full {
-		return nil, errTooManySessions
-	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    id,
@@ -258,6 +257,37 @@ func (s *Server) dropExpired(now time.Time) {
 			delete(s.sessions, id)
 		}
 	}
+}
+
+// evict drops the session that loses least: one that keeps nothing, as a
+// request without a cookie opens, before one with settings or pending states,
+// before one with a history, and among those the one seen longest ago. The
+// caller holds sessionsMu.
+func (s *Server) evict() {
+	var victim string
+	var worth int
+	var seen time.Time
+	for id, sess := range s.sessions {
+		w := sess.worth()
+		if victim == "" || w < worth || (w == worth && sess.seen.Before(seen)) {
+			victim, worth, seen = id, w, sess.seen
+		}
+	}
+	delete(s.sessions, victim)
+}
+
+// worth ranks what a session would lose if dropped: 0 nothing, 1 settings or
+// pending states, 2 a history.
+func (sess *session) worth() int {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	switch {
+	case len(sess.history) > 0:
+		return 2
+	case sess.settings != nil || len(sess.states) > 0:
+		return 1
+	}
+	return 0
 }
 
 // configFor returns the configuration for a session: locked, the fixed one
