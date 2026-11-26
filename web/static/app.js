@@ -103,6 +103,8 @@ function applyLocked(locked) {
       if (el.type === 'password') el.placeholder = 'set on the server';
     }
   });
+  // form_post is refused: its callback would come without the session cookie.
+  document.querySelectorAll('#cfg-response-mode option[value="form_post"]').forEach(o => { o.disabled = true; });
 }
 
 function applyConfigToForm(cfg) {

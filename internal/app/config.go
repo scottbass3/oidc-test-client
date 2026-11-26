@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -74,10 +75,32 @@ func (c *Config) setTunables(from Config) {
 	c.ExtraTokenParams = from.ExtraTokenParams
 }
 
+// In locked mode the extra parameters leave alone what the client sets itself
+// in a request: the client and its redirect URI, what ties the request to the
+// session and, at the token endpoint, the grant, which would otherwise let a
+// tester ask for one in the client's own name.
+var (
+	fixedAuthorizeParams = []string{"client_id", "redirect_uri", "state", "nonce"}
+	fixedTokenParams     = []string{"client_id", "client_secret", "client_assertion", "client_assertion_type",
+		"redirect_uri", "grant_type", "code", "refresh_token"}
+)
+
+// withoutParams returns extra without the parameters named by fixed.
+func withoutParams(extra map[string]string, fixed []string) map[string]string {
+	out := make(map[string]string, len(extra))
+	for k, v := range extra {
+		if !slices.Contains(fixed, k) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // lockedChange names the first field of posted that locked mode refuses, ""
 // when there is none: a provider endpoint or a client field that differs from
-// the fixed one, or any client secret, so that the answer does not tell
-// whether a guess is right. An empty field asks for no change.
+// the fixed one, any client secret, so that the answer does not tell whether
+// a guess is right, or an extra parameter that would replace one the client
+// sets itself. An empty field asks for no change.
 func lockedChange(posted, fixed Config) string {
 	if posted.ClientSecret != "" {
 		return "client_secret"
@@ -96,6 +119,20 @@ func lockedChange(posted, fixed Config) string {
 	} {
 		if f.posted != "" && f.posted != f.fixed {
 			return f.name
+		}
+	}
+	for _, e := range []struct {
+		name  string
+		extra map[string]string
+		fixed []string
+	}{
+		{"extra_authorize_params", posted.ExtraAuthorizeParams, fixedAuthorizeParams},
+		{"extra_token_params", posted.ExtraTokenParams, fixedTokenParams},
+	} {
+		for _, k := range e.fixed {
+			if _, ok := e.extra[k]; ok {
+				return e.name + "." + k
+			}
 		}
 	}
 	return ""

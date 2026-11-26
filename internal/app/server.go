@@ -1,7 +1,9 @@
 package app
 
 import (
+	"errors"
 	"io/fs"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,6 +19,14 @@ const (
 	// DefaultSessionTTL is how long a locked mode session outlives its last
 	// request.
 	DefaultSessionTTL = 12 * time.Hour
+
+	// What anyone who reaches a locked instance can have it keep is bounded:
+	// maxSessions sessions, maxStates pending states in each, and requests
+	// whose body, the settings a session keeps included, is at most
+	// maxLockedBody bytes.
+	maxSessions   = 1000
+	maxStates     = 20
+	maxLockedBody = 64 << 10
 
 	// sessionCookie names the cookie of a locked mode session. The __Host-
 	// prefix has browsers refuse it unless it is Secure and bound to this host.
@@ -117,14 +127,30 @@ func (s *Server) Start(addr string) error {
 }
 
 // ServeHTTP serves the client, in locked mode with the security headers.
+//
+// Locked, a POST to the API has to come from the client's own page, as JSON:
+// a form on another site can send neither, and so cannot change a tester's
+// session, or give them a new one, behind their back.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.locked {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
 		h.Set("Referrer-Policy", "no-referrer")
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/") {
+		api := strings.HasPrefix(r.URL.Path, "/api/")
+		if api || strings.HasPrefix(r.URL.Path, "/auth/") {
 			h.Set("Cache-Control", "no-store")
 		}
+		if api && r.Method == http.MethodPost {
+			if !sameOrigin(r) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request refused"})
+				return
+			}
+			if ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); ct != "application/json" {
+				writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
+				return
+			}
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxLockedBody)
 	}
 	s.mux.ServeHTTP(w, r)
 }
@@ -143,8 +169,12 @@ func (s *Server) session(r *http.Request) *session {
 	return newSession()
 }
 
+// errTooManySessions is openSession's when maxSessions are live.
+var errTooManySessions = errors.New("too many sessions, try again later")
+
 // openSession is session for the requests that store something: locked, a
-// browser without a session gets one, and the cookie that names it.
+// browser without a session gets one, and the cookie that names it, unless
+// maxSessions are live already.
 func (s *Server) openSession(w http.ResponseWriter, r *http.Request) (*session, error) {
 	if !s.locked {
 		return s.shared, nil
@@ -159,8 +189,17 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) (*session, 
 	sess := newSession()
 	sess.seen = time.Now()
 	s.sessionsMu.Lock()
-	s.sessions[id] = sess
+	if len(s.sessions) >= maxSessions {
+		s.dropExpired(sess.seen)
+	}
+	full := len(s.sessions) >= maxSessions
+	if !full {
+		s.sessions[id] = sess
+	}
 	s.sessionsMu.Unlock()
+	if full {
+		return nil, errTooManySessions
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    id,
@@ -194,11 +233,8 @@ func (s *Server) cookieSession(r *http.Request) *session {
 func (s *Server) clean(now time.Time) {
 	live := []*session{s.shared}
 	s.sessionsMu.Lock()
-	for id, sess := range s.sessions {
-		if now.Sub(sess.seen) >= s.sessionTTL {
-			delete(s.sessions, id)
-			continue
-		}
+	s.dropExpired(now)
+	for _, sess := range s.sessions {
 		live = append(live, sess)
 	}
 	s.sessionsMu.Unlock()
@@ -211,6 +247,16 @@ func (s *Server) clean(now time.Time) {
 			}
 		}
 		sess.mu.Unlock()
+	}
+}
+
+// dropExpired drops the sessions not seen for the TTL. The caller holds
+// sessionsMu.
+func (s *Server) dropExpired(now time.Time) {
+	for id, sess := range s.sessions {
+		if now.Sub(sess.seen) >= s.sessionTTL {
+			delete(s.sessions, id)
+		}
 	}
 }
 
@@ -229,10 +275,21 @@ func (s *Server) configFor(sess *session) Config {
 	return cfg
 }
 
+// addState keeps a pending state, in place of the oldest one when maxStates
+// are waiting already.
 func (sess *session) addState(fs *FlowState) {
 	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if _, known := sess.states[fs.State]; !known && len(sess.states) >= maxStates {
+		var oldest *FlowState
+		for _, st := range sess.states {
+			if oldest == nil || st.CreatedAt.Before(oldest.CreatedAt) {
+				oldest = st
+			}
+		}
+		delete(sess.states, oldest.State)
+	}
 	sess.states[fs.State] = fs
-	sess.mu.Unlock()
 }
 
 // takeState returns the pending state and forgets it, as it serves once.

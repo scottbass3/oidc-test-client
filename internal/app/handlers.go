@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io/fs"
@@ -42,8 +43,19 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, 200, s.configView(s.configFor(s.session(r))))
+		// The page reads the configuration first: locked, that is when the
+		// browser gets its session, so that the requests it sends next, even
+		// several at once, all come with the same cookie.
+		sess, err := s.openSession(w, r)
+		if err != nil {
+			sess = s.session(r)
+		}
+		writeJSON(w, 200, s.configView(s.configFor(sess)))
 	case http.MethodPost:
+		if s.locked {
+			s.saveSettings(w, r)
+			return
+		}
 		var c Config
 		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
@@ -55,29 +67,89 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if c.ExtraTokenParams == nil {
 			c.ExtraTokenParams = map[string]string{}
 		}
-		if s.locked {
-			// The provider and the client are fixed: the settings go to the
-			// session, and nothing to the configuration or its file.
-			if field := lockedChange(c, s.config.Get()); field != "" {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": field + " is fixed in locked mode"})
-				return
-			}
-			sess, err := s.openSession(w, r)
-			if err != nil {
-				writeJSON(w, 500, map[string]string{"error": "failed to open a session: " + err.Error()})
-				return
-			}
-			sess.mu.Lock()
-			sess.settings = &c
-			sess.mu.Unlock()
-			writeJSON(w, 200, s.configView(s.configFor(sess)))
-			return
-		}
 		s.config.Set(c)
 		writeJSON(w, 200, s.configView(s.config.Get()))
 	default:
 		w.WriteHeader(405)
 	}
+}
+
+// saveSettings is the POST of the configuration in locked mode. The provider
+// and the client are fixed: the settings go to the session, and nothing to
+// the configuration or its file. A setting the body leaves out keeps its
+// value.
+func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
+	cur := s.configFor(s.session(r))
+	// Decoded over the current settings, without the secret, that the body may
+	// not carry, nor the slice and the maps, that decoding would write into.
+	c := cur
+	c.ClientSecret = ""
+	c.Scopes, c.ExtraAuthorizeParams, c.ExtraTokenParams = nil, nil, nil
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	if c.Scopes == nil {
+		c.Scopes = cur.Scopes
+	}
+	if c.ExtraAuthorizeParams == nil {
+		c.ExtraAuthorizeParams = cur.ExtraAuthorizeParams
+	}
+	if c.ExtraTokenParams == nil {
+		c.ExtraTokenParams = cur.ExtraTokenParams
+	}
+	if field := lockedChange(c, s.config.Get()); field != "" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": field + " is fixed in locked mode"})
+		return
+	}
+	if err := s.checkResponseMode(c.ResponseMode); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	sess, err := s.openSession(w, r)
+	if err != nil {
+		writeSessionError(w, err)
+		return
+	}
+	sess.mu.Lock()
+	sess.settings = &c
+	sess.mu.Unlock()
+	writeJSON(w, 200, s.configView(s.configFor(sess)))
+}
+
+// checkResponseMode refuses form_post in locked mode: the provider's POST
+// comes from another site, so without the session cookie, which is
+// SameSite=Lax, and its state could never be found.
+func (s *Server) checkResponseMode(mode string) error {
+	if s.locked && mode == "form_post" {
+		return errors.New("response_mode form_post is not supported in locked mode: the callback would come without the session cookie")
+	}
+	return nil
+}
+
+// writeSessionError answers a request that could not open its session.
+func writeSessionError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	if errors.Is(err, errTooManySessions) {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, map[string]string{"error": "failed to open a session: " + err.Error()})
+}
+
+// authorizeExtras and tokenExtras return the extra parameters to send: locked,
+// without those that would replace what the client sets itself.
+func (s *Server) authorizeExtras(extra map[string]string) map[string]string {
+	if !s.locked {
+		return extra
+	}
+	return withoutParams(extra, fixedAuthorizeParams)
+}
+
+func (s *Server) tokenExtras(extra map[string]string) map[string]string {
+	if !s.locked {
+		return extra
+	}
+	return withoutParams(extra, fixedTokenParams)
 }
 
 // configView is the configuration as the browser gets it: locked says whether
@@ -176,18 +248,17 @@ func (s *Server) handleAuthorizeURL(w http.ResponseWriter, r *http.Request) {
 	if s.locked {
 		req.AuthorizationURL, req.ClientID, req.RedirectURI = "", "", ""
 	}
-	sess, err := s.openSession(w, r)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "failed to open a session: " + err.Error()})
-		return
-	}
-	cfg := s.configFor(sess)
+	cfg := s.configFor(s.session(r))
 
 	authURL := coalesce(req.AuthorizationURL, cfg.AuthorizationURL)
 	clientID := coalesce(req.ClientID, cfg.ClientID)
 	redirectURI := coalesce(req.RedirectURI, cfg.RedirectURI)
 	responseType := coalesce(req.ResponseType, cfg.ResponseType, "code")
 	responseMode := coalesce(req.ResponseMode, cfg.ResponseMode)
+	if err := s.checkResponseMode(responseMode); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
 
 	scopes := req.Scopes
 	if len(scopes) == 0 {
@@ -216,6 +287,11 @@ func (s *Server) handleAuthorizeURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register the state so /auth/callback can complete the exchange.
+	sess, err := s.openSession(w, r)
+	if err != nil {
+		writeSessionError(w, err)
+		return
+	}
 	sess.addState(&FlowState{
 		State:        state,
 		Nonce:        nonce,
@@ -240,10 +316,7 @@ func (s *Server) handleAuthorizeURL(w http.ResponseWriter, r *http.Request) {
 		params.Set("code_challenge_method", method)
 	}
 
-	for k, v := range cfg.ExtraAuthorizeParams {
-		params.Set(k, v)
-	}
-	for k, v := range req.ExtraParams {
+	for k, v := range s.authorizeExtras(mergeParams(cfg.ExtraAuthorizeParams, req.ExtraParams)) {
 		params.Set(k, v)
 	}
 
@@ -318,7 +391,7 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	clientSecret := coalesce(req.ClientSecret, cfg.ClientSecret)
 	redirectURI := coalesce(req.RedirectURI, cfg.RedirectURI)
 
-	extra := mergeParams(cfg.ExtraTokenParams, req.ExtraParams)
+	extra := s.tokenExtras(mergeParams(cfg.ExtraTokenParams, req.ExtraParams))
 
 	result := exchangeCode(tokenURL, clientID, clientSecret, req.Code, redirectURI, req.CodeVerifier, extra)
 	writeJSON(w, 200, result)
@@ -354,7 +427,7 @@ func (s *Server) handleTokenRefresh(w http.ResponseWriter, r *http.Request) {
 	clientID := coalesce(req.ClientID, cfg.ClientID)
 	clientSecret := coalesce(req.ClientSecret, cfg.ClientSecret)
 
-	extra := mergeParams(cfg.ExtraTokenParams, req.ExtraParams)
+	extra := s.tokenExtras(mergeParams(cfg.ExtraTokenParams, req.ExtraParams))
 
 	result := refreshToken(tokenURL, clientID, clientSecret, req.RefreshToken, extra)
 	writeJSON(w, 200, result)
@@ -450,12 +523,7 @@ func (s *Server) handleJWTDecode(w http.ResponseWriter, r *http.Request) {
 // --- Full Auth Flow ---
 
 func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
-	sess, err := s.openSession(w, r)
-	if err != nil {
-		http.Error(w, "failed to open a session", 500)
-		return
-	}
-	cfg := s.configFor(sess)
+	cfg := s.configFor(s.session(r))
 
 	if cfg.AuthorizationURL == "" {
 		http.Error(w, "authorization_url not configured", 400)
@@ -512,17 +580,35 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 		params.Set("code_challenge_method", cfg.PKCEMethod)
 	}
 
-	for k, v := range cfg.ExtraAuthorizeParams {
+	for k, v := range s.authorizeExtras(cfg.ExtraAuthorizeParams) {
 		params.Set(k, v)
 	}
 
+	// The session opens last, once the request is known to start a flow.
+	sess, err := s.openSession(w, r)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errTooManySessions) {
+			status = http.StatusServiceUnavailable
+		}
+		http.Error(w, "failed to open a session: "+err.Error(), status)
+		return
+	}
 	sess.addState(flowState)
 
 	http.Redirect(w, r, cfg.AuthorizationURL+"?"+params.Encode(), http.StatusFound)
 }
 
 func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
+	// The answer is in the query, or in the form with response_mode=form_post.
 	q := r.URL.Query()
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			renderCallbackError(w, "invalid callback form: "+err.Error())
+			return
+		}
+		q = r.PostForm
+	}
 
 	if errStr := q.Get("error"); errStr != "" {
 		desc := q.Get("error_description")
@@ -550,7 +636,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := s.configFor(sess)
-	extra := mergeParams(cfg.ExtraTokenParams, nil)
+	extra := s.tokenExtras(cfg.ExtraTokenParams)
 
 	result := exchangeCode(cfg.TokenURL, cfg.ClientID, cfg.ClientSecret, code, cfg.RedirectURI, flowState.CodeVerifier, extra)
 	id := sess.addHistory(result, callbackParams)

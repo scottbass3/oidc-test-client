@@ -513,3 +513,220 @@ func TestUnlockedIsUnchanged(t *testing.T) {
 		t.Errorf("a session cookie was set: %v, %v", alice.cookie, bob.cookie)
 	}
 }
+
+// The extra parameters, saved or sent with a request, do not replace what the
+// client sets itself.
+func TestLockedExtrasLeaveTheFixedParameters(t *testing.T) {
+	p := newProvider(t)
+	s := newLockedServer(t, p)
+	fixed := s.config.Get()
+	alice := &browser{t: t, s: s}
+
+	for body, field := range map[string]string{
+		`{"extra_authorize_params":{"client_id":"other"}}`:                   "extra_authorize_params.client_id",
+		`{"extra_authorize_params":{"redirect_uri":"https://evil.example"}}`: "extra_authorize_params.redirect_uri",
+		`{"extra_token_params":{"grant_type":"client_credentials"}}`:         "extra_token_params.grant_type",
+		`{"extra_token_params":{"client_secret":"guess"}}`:                   "extra_token_params.client_secret",
+	} {
+		var out map[string]string
+		alice.json(http.MethodPost, "/api/config", body, http.StatusForbidden, &out)
+		if !strings.Contains(out["error"], field) {
+			t.Errorf("%s: error %q, want it to name %s", body, out["error"], field)
+		}
+	}
+
+	var out struct {
+		URL   string `json:"url"`
+		State string `json:"state"`
+	}
+	alice.json(http.MethodPost, "/api/authorize-url",
+		`{"extra_params":{"client_id":"other","redirect_uri":"https://evil.example/cb","state":"forced","prompt":"login"}}`, 200, &out)
+	u, err := url.Parse(out.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := u.Query(); q.Get("client_id") != "client" || q.Get("redirect_uri") != fixed.RedirectURI || q.Get("state") != out.State || q.Get("prompt") != "login" {
+		t.Errorf("URL %s, want the fixed client, redirect URI and state, and the prompt", out.URL)
+	}
+
+	extra := `"extra_params":{"grant_type":"client_credentials","client_id":"other","redirect_uri":"https://evil.example/cb","resource":"api"}`
+	for path, body := range map[string]string{
+		"/api/token/exchange": `{"code":"c",` + extra + `}`,
+		"/api/token/refresh":  `{"refresh_token":"rt",` + extra + `}`,
+	} {
+		var res OIDCResult
+		alice.json(http.MethodPost, path, body, 200, &res)
+		sent, err := url.ParseQuery(res.Request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g := sent.Get("grant_type"); g == "client_credentials" || sent.Has("client_id") || strings.Contains(res.Request.Body, "evil.example") || sent.Get("resource") != "api" {
+			t.Errorf("%s sent %q, want the grant and the client left alone, and the resource", path, res.Request.Body)
+		}
+	}
+}
+
+// A page of another site cannot post to the API, with a form or otherwise.
+func TestLockedRefusesCrossSitePosts(t *testing.T) {
+	s := newLockedServer(t, newProvider(t))
+	for _, tc := range []struct {
+		name, contentType, site string
+		code                    int
+	}{
+		{"a form of another site", "text/plain", "cross-site", http.StatusForbidden},
+		{"a fetch of another site", "application/json", "cross-site", http.StatusForbidden},
+		{"a form without Sec-Fetch-Site", "text/plain", "", http.StatusUnsupportedMediaType},
+		{"the page", "application/json; charset=utf-8", "same-origin", 200},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(`{"scopes":["openid"]}`))
+		req.Header.Set("Content-Type", tc.contentType)
+		if tc.site != "" {
+			req.Header.Set("Sec-Fetch-Site", tc.site)
+		}
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code != tc.code {
+			t.Errorf("%s: status %d, want %d: %s", tc.name, rec.Code, tc.code, rec.Body)
+		}
+		if refused := tc.code != 200; refused && rec.Header().Get("Set-Cookie") != "" {
+			t.Errorf("%s: a refused request got a session", tc.name)
+		}
+	}
+}
+
+// What a locked instance keeps for whoever reaches it is bounded.
+func TestLockedBounds(t *testing.T) {
+	s := newLockedServer(t, newProvider(t))
+	sessions := func() int {
+		s.sessionsMu.Lock()
+		defer s.sessionsMu.Unlock()
+		return len(s.sessions)
+	}
+
+	// A request that fails, or only reads the history, opens no session.
+	stranger := &browser{t: t, s: s}
+	stranger.do(http.MethodPost, "/api/config", `{"client_id":"other"}`)
+	stranger.do(http.MethodPost, "/api/authorize-url", `{"response_mode":"form_post"}`)
+	stranger.history()
+	if n := sessions(); n != 0 || stranger.cookie != nil {
+		t.Errorf("%d sessions after requests that store nothing, want none", n)
+	}
+
+	// A session keeps the newest maxStates states.
+	alice := &browser{t: t, s: s}
+	first := alice.start()
+	for i := 0; i < maxStates; i++ {
+		alice.start()
+	}
+	sess := s.sessions[alice.cookie.Value]
+	sess.mu.Lock()
+	_, kept := sess.states[first]
+	n := len(sess.states)
+	sess.mu.Unlock()
+	if kept || n != maxStates {
+		t.Errorf("%d states, the oldest kept: %v, want the newest %d", n, kept, maxStates)
+	}
+
+	// A body over the limit is refused.
+	big := `{"extra_authorize_params":{"x":"` + strings.Repeat("a", maxLockedBody) + `"}}`
+	if rec := alice.do(http.MethodPost, "/api/config", big); rec.Code != http.StatusBadRequest {
+		t.Errorf("a body over the limit: status %d, want 400", rec.Code)
+	}
+
+	// With maxSessions live, no other opens, but the config is still served;
+	// an expired session leaves its place.
+	for sessions() < maxSessions {
+		(&browser{t: t, s: s}).start()
+	}
+	late := &browser{t: t, s: s}
+	if rec := late.do(http.MethodGet, "/auth/start", ""); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("/auth/start with the sessions full: status %d, want 503", rec.Code)
+	}
+	if rec := late.do(http.MethodPost, "/api/config", `{"scopes":["openid"]}`); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("saving with the sessions full: status %d, want 503", rec.Code)
+	}
+	if rec := late.do(http.MethodGet, "/api/config", ""); rec.Code != 200 || late.cookie != nil {
+		t.Errorf("config with the sessions full: status %d, cookie %v, want it served without a session", rec.Code, late.cookie)
+	}
+	if n := sessions(); n != maxSessions {
+		t.Errorf("%d sessions, want %d", n, maxSessions)
+	}
+	s.sessionsMu.Lock()
+	s.sessions[alice.cookie.Value].seen = time.Now().Add(-s.sessionTTL)
+	s.sessionsMu.Unlock()
+	late.start()
+	if late.cookie == nil || sessions() != maxSessions {
+		t.Errorf("an expired session did not leave its place: cookie %v, %d sessions", late.cookie, sessions())
+	}
+}
+
+// Loading the page opens the session, so that requests sent at once after it
+// share it.
+func TestLockedPageLoadOpensTheSession(t *testing.T) {
+	s := newLockedServer(t, newProvider(t))
+	b := &browser{t: t, s: s}
+	b.json(http.MethodGet, "/api/config", "", 200, nil)
+	if b.cookie == nil {
+		t.Fatal("reading the config opened no session")
+	}
+	id := b.cookie.Value
+	b.start()
+	b.json(http.MethodPost, "/api/authorize-url", `{}`, 200, nil)
+	if b.cookie.Value != id || len(s.sessions) != 1 {
+		t.Errorf("session %s then %s, %d sessions, want the one", id, b.cookie.Value, len(s.sessions))
+	}
+}
+
+// Saving some settings keeps the others.
+func TestLockedPartialSettings(t *testing.T) {
+	s := newLockedServer(t, newProvider(t))
+	b := &browser{t: t, s: s}
+	var cfg configView
+	b.json(http.MethodPost, "/api/config", `{"pkce_enabled":true}`, 200, &cfg)
+	if strings.Join(cfg.Scopes, " ") != "openid profile email" || cfg.PKCEMethod != "S256" || cfg.ResponseType != "code" || !cfg.PKCEEnabled {
+		t.Errorf("after saving PKCE alone: %+v, want the other defaults kept", cfg)
+	}
+	b.json(http.MethodPost, "/api/config", `{"scopes":["openid"],"extra_authorize_params":{"prompt":"login"}}`, 200, nil)
+	b.json(http.MethodPost, "/api/config", `{"response_mode":"fragment"}`, 200, &cfg)
+	if strings.Join(cfg.Scopes, " ") != "openid" || !cfg.PKCEEnabled || cfg.ExtraAuthorizeParams["prompt"] != "login" || cfg.ResponseMode != "fragment" {
+		t.Errorf("after three saves: %+v, want them all", cfg)
+	}
+	var emptied configView
+	b.json(http.MethodPost, "/api/config", `{"extra_authorize_params":{}}`, 200, &emptied)
+	if len(emptied.ExtraAuthorizeParams) != 0 || strings.Join(emptied.Scopes, " ") != "openid" {
+		t.Errorf("after emptying the extra parameters: %+v, want only them emptied", emptied)
+	}
+	if def := s.config.Get(); len(def.Scopes) != 3 || len(def.ExtraAuthorizeParams) != 0 {
+		t.Errorf("shared config changed: %+v", def)
+	}
+}
+
+// form_post: refused locked, where the callback would come without the
+// session cookie, and read from the form otherwise.
+func TestFormPost(t *testing.T) {
+	p := newProvider(t)
+	locked := &browser{t: t, s: newLockedServer(t, p)}
+	for path, body := range map[string]string{
+		"/api/config":        `{"response_mode":"form_post"}`,
+		"/api/authorize-url": `{"response_mode":"form_post"}`,
+	} {
+		var out map[string]string
+		locked.json(http.MethodPost, path, body, http.StatusBadRequest, &out)
+		if !strings.Contains(out["error"], "form_post") {
+			t.Errorf("%s: error %q, want form_post refused", path, out["error"])
+		}
+	}
+
+	s := newTestServer(t, Config{
+		AuthorizationURL: p.URL + "/auth", TokenURL: p.URL + "/token",
+		ClientID: "client", RedirectURI: "https://rp.example/auth/callback", ResponseMode: "form_post",
+	})
+	b := &browser{t: t, s: s}
+	rec := b.do(http.MethodPost, "/auth/callback", "code=posted&state="+url.QueryEscape(b.start()))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("form_post callback: status %d: %s", rec.Code, rec.Body)
+	}
+	if h := b.history(); len(h) != 1 || h[0].CallbackParams["code"] != "posted" {
+		t.Errorf("history %+v, want the flow of the posted code", h)
+	}
+}
