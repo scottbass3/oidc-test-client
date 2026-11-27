@@ -107,7 +107,7 @@ func (b *browser) do(method, target, body string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	b.s.ServeHTTP(rec, req)
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == sessionCookie {
+		if c.Name == b.s.cookieName {
 			b.cookie = c
 		}
 	}

@@ -1,9 +1,12 @@
 package app
 
 import (
+	"errors"
 	"io/fs"
 	"mime"
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +34,11 @@ const (
 	// sessionCookie names the cookie of a locked mode session. The __Host-
 	// prefix has browsers refuse it unless it is Secure and bound to this host.
 	sessionCookie = "__Host-oidc-test-client"
+
+	// prefixedSessionCookie names it when the client is served under a path
+	// prefix: __Host- wants the path "/", so the cookie, bound to the prefix,
+	// only keeps the Secure half of the guarantee.
+	prefixedSessionCookie = "__Secure-oidc-test-client"
 )
 
 type FlowState struct {
@@ -76,8 +84,14 @@ func newSession() *session {
 
 type Server struct {
 	mux      *http.ServeMux
+	routes   map[string]bool // the paths registered on mux, the static files aside
 	config   *ConfigStore
 	staticFS fs.FS
+
+	// basePath is the path the client is served under, "/" unless WebURL has
+	// one. It starts and ends with "/".
+	basePath   string
+	cookieName string
 
 	// locked is the mode for shared deployments: the provider and the client
 	// are fixed by the environment, and each browser has its own session.
@@ -99,17 +113,60 @@ type Options struct {
 	// SessionTTL is how long a locked mode session outlives its last request,
 	// DefaultSessionTTL when zero.
 	SessionTTL time.Duration
+	// WebURL is the public URL of the client, one ParseWebURL accepts, when
+	// it is served under a path of its host or to have the redirect URIs
+	// default to it. Empty, the client is at the root of its host.
+	WebURL string
 }
 
+// ParseWebURL checks v, the public URL of the client, and returns it with a
+// path that ends with "/". A path with characters to escape is refused: the
+// path is written as it is in the redirects, the links and the cookie.
+func ParseWebURL(v string) (string, error) {
+	u, err := url.Parse(v)
+	if err != nil {
+		return "", err
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", errors.New("want an absolute http or https URL")
+	}
+	if u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return "", errors.New("want no query, fragment or credentials")
+	}
+	u.Path, u.RawPath = path.Clean("/"+u.Path), ""
+	if u.Path != "/" {
+		u.Path += "/"
+	}
+	if u.EscapedPath() != u.Path {
+		return "", errors.New("want a path without characters to escape")
+	}
+	return u.String(), nil
+}
+
+// New returns the server of the client. It panics on a WebURL that ParseWebURL
+// refuses.
 func New(opts Options) *Server {
 	ttl := opts.SessionTTL
 	if ttl <= 0 {
 		ttl = DefaultSessionTTL
 	}
+	basePath, cookieName, webURL := "/", sessionCookie, ""
+	if opts.WebURL != "" {
+		var err error
+		if webURL, err = ParseWebURL(opts.WebURL); err != nil {
+			panic("app.New: WebURL " + opts.WebURL + ": " + err.Error())
+		}
+		if u, _ := url.Parse(webURL); u.Path != "/" {
+			basePath, cookieName = u.Path, prefixedSessionCookie
+		}
+	}
 	s := &Server{
 		mux:        http.NewServeMux(),
-		config:     NewConfigStore(opts.ConfigFile, opts.Locked),
+		routes:     make(map[string]bool),
+		config:     NewConfigStore(opts.ConfigFile, opts.Locked, webURL),
 		staticFS:   opts.StaticFS,
+		basePath:   basePath,
+		cookieName: cookieName,
 		locked:     opts.Locked,
 		sessionTTL: ttl,
 		shared:     newSession(),
@@ -136,6 +193,20 @@ func (s *Server) Start(addr string) error {
 // a form on another site can send neither, and so cannot change a tester's
 // session, or give them a new one, behind their back.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.basePath != "/" {
+		// The address of the page ends with "/". Behind a proxy that strips
+		// the prefix this request does not come as such: there, the <base> of
+		// the page has its relative URLs resolve under the prefix all the same.
+		if r.URL.Path+"/" == s.basePath {
+			target := s.basePath
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+			return
+		}
+		r = s.stripBasePath(r)
+	}
 	if s.locked {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
@@ -161,6 +232,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxLockedBody)
 	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// stripBasePath returns r with the path the routes know: the reverse proxy in
+// front may forward the path under the prefix as it is, or strip the prefix
+// itself. A path that is a route as it comes, and none without the prefix, was
+// stripped already: under the prefix /auth/, /auth/start is the stripped
+// /auth/auth/start.
+func (s *Server) stripBasePath(r *http.Request) *http.Request {
+	p := r.URL.Path
+	if !strings.HasPrefix(p, s.basePath) {
+		return r
+	}
+	stripped := "/" + p[len(s.basePath):]
+	if s.routes[p] && !s.routes[stripped] {
+		return r
+	}
+	r2 := new(http.Request)
+	*r2 = *r
+	r2.URL = new(url.URL)
+	*r2.URL = *r.URL
+	r2.URL.Path = stripped
+	r2.URL.RawPath = ""
+	return r2
 }
 
 // session returns the session of the browser behind r. Not locked, it is the
@@ -204,9 +298,9 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) (*session, 
 	s.sessions[id] = sess
 	s.sessionsMu.Unlock()
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
+		Name:     s.cookieName,
 		Value:    id,
-		Path:     "/",
+		Path:     s.basePath,
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
@@ -216,7 +310,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) (*session, 
 
 // cookieSession returns the live session the cookie of r names, nil without.
 func (s *Server) cookieSession(r *http.Request) *session {
-	c, err := r.Cookie(sessionCookie)
+	c, err := r.Cookie(s.cookieName)
 	if err != nil {
 		return nil
 	}

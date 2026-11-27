@@ -44,19 +44,36 @@ Settings are saved to `config.json` in the working directory and persist across 
 |---|---|
 | `PORT` | Listen port (default: `8080`) |
 | `CONFIG_FILE` | Path to config JSON (default: `config.json`) |
+| `WEB_URL` | Public URL of the client, to serve it under a path of a host, see [Path prefix](#path-prefix) (optional) |
 | `OIDC_ISSUER_URL` | Provider issuer URL |
 | `OIDC_CLIENT_ID` | Client ID |
 | `OIDC_CLIENT_SECRET` | Client secret |
-| `OIDC_REDIRECT_URI` | Redirect URI |
+| `OIDC_REDIRECT_URI` | Redirect URI (default with `WEB_URL`: `WEB_URL` + `auth/callback`) |
 | `OIDC_AUTH_URL` | Authorization endpoint (overrides discovery) |
 | `OIDC_TOKEN_URL` | Token endpoint (overrides discovery) |
 | `OIDC_USERINFO_URL` | UserInfo endpoint (overrides discovery) |
 | `OIDC_INTROSPECTION_URL` | Introspection endpoint (overrides discovery) |
 | `OIDC_JWKS_URI` | JWKS URI (overrides discovery) |
 | `OIDC_END_SESSION_URL` | End session endpoint, for the logout (overrides discovery) |
-| `OIDC_POST_LOGOUT_REDIRECT_URI` | Where the provider sends the browser back after the logout, with `state` (optional) |
+| `OIDC_POST_LOGOUT_REDIRECT_URI` | Where the provider sends the browser back after the logout, with `state` (optional; default with `WEB_URL`: `WEB_URL`) |
 | `LOCKED` | `true` for a shared deployment, see [Locked mode](#locked-mode) (default: `false`) |
 | `SESSION_TTL` | Locked mode: how long a browser's session, with its history, outlives its last request (default: `12h`) |
+
+## Path prefix
+
+By default the client is at the root of its host. To serve it under a path of an existing host instead, set `WEB_URL` to its public URL:
+
+```
+WEB_URL=https://example.com/auth/client/
+```
+
+- The reverse proxy in front may forward the path as it is (`/auth/client/api/config`) or strip the prefix (`/api/config`): both are accepted.
+- `/auth/client` redirects to `/auth/client/` when the proxy forwards the path; when it strips the prefix, the page is served at `/auth/client` and works there too. The callback lands back on `/auth/client/?flow=…`.
+- `OIDC_REDIRECT_URI` defaults to `WEB_URL` + `auth/callback` and `OIDC_POST_LOGOUT_REDIRECT_URI` to `WEB_URL`, when neither the environment nor the config file sets them. The defaults are not saved to the config file: they follow `WEB_URL` when it changes.
+- The path of `WEB_URL` has no character that needs escaping (a space, `%3F`…).
+- In [locked mode](#locked-mode), the session cookie is bound to the prefix: it is named `__Secure-oidc-test-client` instead of `__Host-oidc-test-client`, as the `__Host-` prefix only allows the path `/`. The other applications of the host are the same origin as the client: the checks on the origin of a request and the Content-Security-Policy do not tell them apart from it.
+
+Without `WEB_URL`, nothing changes.
 
 ## Locked mode
 
@@ -102,6 +119,8 @@ For the Full Flow tab, set your redirect URI to:
 ```
 http://<host>:<port>/auth/callback
 ```
+
+With `WEB_URL`, that is `WEB_URL` + `auth/callback`, the default.
 
 The callback endpoint exchanges the authorization code for tokens and displays the result.
 

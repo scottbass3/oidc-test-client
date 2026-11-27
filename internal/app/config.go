@@ -46,21 +46,59 @@ type ConfigStore struct {
 	mu       sync.RWMutex
 	config   Config
 	filepath string
+
+	// webURL is the public URL of the client, "" without. The redirect URIs
+	// left empty are the ones under it: they are filled in when the
+	// configuration is read and never stored, so that they follow webURL.
+	webURL string
 }
 
 // NewConfigStore reads the configuration from the file, then the environment.
 // Locked, the file is left out: the provider and the client come from the
-// environment only.
-func NewConfigStore(filepath string, locked bool) *ConfigStore {
+// environment only. With webURL, the public URL of the client, the redirect
+// URIs left empty are the ones under it.
+func NewConfigStore(filepath string, locked bool, webURL string) *ConfigStore {
 	cs := &ConfigStore{
 		config:   defaultConfig(),
 		filepath: filepath,
+		webURL:   webURL,
 	}
 	if !locked {
 		cs.loadFromFile()
 	}
 	cs.loadFromEnv()
+	cs.config = cs.withoutDefaults(cs.config)
 	return cs
+}
+
+// withDefaults returns c with the redirect URIs left empty set to the ones
+// under webURL.
+func (cs *ConfigStore) withDefaults(c Config) Config {
+	if cs.webURL == "" {
+		return c
+	}
+	if c.RedirectURI == "" {
+		c.RedirectURI = cs.webURL + "auth/callback"
+	}
+	if c.PostLogoutRedirectURI == "" {
+		c.PostLogoutRedirectURI = cs.webURL
+	}
+	return c
+}
+
+// withoutDefaults is the reverse of withDefaults: the page posts back the
+// defaults it was given, which are not to be stored as a choice.
+func (cs *ConfigStore) withoutDefaults(c Config) Config {
+	if cs.webURL == "" {
+		return c
+	}
+	if c.RedirectURI == cs.webURL+"auth/callback" {
+		c.RedirectURI = ""
+	}
+	if c.PostLogoutRedirectURI == cs.webURL {
+		c.PostLogoutRedirectURI = ""
+	}
+	return c
 }
 
 // setTunables copies from from the settings a tester tunes in locked mode,
@@ -142,13 +180,13 @@ func lockedChange(posted, fixed Config) string {
 func (cs *ConfigStore) Get() Config {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
-	return cs.config
+	return cs.withDefaults(cs.config)
 }
 
 func (cs *ConfigStore) Set(c Config) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	cs.config = c
+	cs.config = cs.withoutDefaults(c)
 	cs.saveToFile()
 }
 

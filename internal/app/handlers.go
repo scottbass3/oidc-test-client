@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,19 +18,34 @@ func (s *Server) registerRoutes() {
 	fileServer := http.FileServer(http.FS(staticFS))
 	s.mux.Handle("/", fileServer)
 
-	s.mux.HandleFunc("/api/config", s.handleConfig)
-	s.mux.HandleFunc("/api/discover", s.handleDiscover)
-	s.mux.HandleFunc("/api/authorize-url", s.handleAuthorizeURL)
-	s.mux.HandleFunc("/api/pkce/generate", s.handlePKCEGenerate)
-	s.mux.HandleFunc("/api/token/exchange", s.handleTokenExchange)
-	s.mux.HandleFunc("/api/token/refresh", s.handleTokenRefresh)
-	s.mux.HandleFunc("/api/userinfo", s.handleUserInfo)
-	s.mux.HandleFunc("/api/introspect", s.handleIntrospect)
-	s.mux.HandleFunc("/api/jwt/decode", s.handleJWTDecode)
-	s.mux.HandleFunc("/api/history", s.handleHistory)
-	s.mux.HandleFunc("/auth/start", s.handleAuthStart)
-	s.mux.HandleFunc("/auth/callback", s.handleAuthCallback)
-	s.mux.HandleFunc("/auth/logout", s.handleLogout)
+	// Under a path prefix the page names it in a <base>: its relative URLs
+	// then resolve under the prefix whatever its own address, with or without
+	// the last "/".
+	if index, err := fs.ReadFile(staticFS, "index.html"); err == nil && s.basePath != "/" {
+		base := "<head>\n  <base href=\"" + html.EscapeString(s.basePath) + "\">"
+		index = bytes.Replace(index, []byte("<head>"), []byte(base), 1)
+		s.mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+			http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
+		})
+	}
+
+	handle := func(route string, h http.HandlerFunc) {
+		s.routes[route] = true
+		s.mux.HandleFunc(route, h)
+	}
+	handle("/api/config", s.handleConfig)
+	handle("/api/discover", s.handleDiscover)
+	handle("/api/authorize-url", s.handleAuthorizeURL)
+	handle("/api/pkce/generate", s.handlePKCEGenerate)
+	handle("/api/token/exchange", s.handleTokenExchange)
+	handle("/api/token/refresh", s.handleTokenRefresh)
+	handle("/api/userinfo", s.handleUserInfo)
+	handle("/api/introspect", s.handleIntrospect)
+	handle("/api/jwt/decode", s.handleJWTDecode)
+	handle("/api/history", s.handleHistory)
+	handle("/auth/start", s.handleAuthStart)
+	handle("/auth/callback", s.handleAuthCallback)
+	handle("/auth/logout", s.handleLogout)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -602,7 +618,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if r.Method == http.MethodPost {
 		if err := r.ParseForm(); err != nil {
-			renderCallbackError(w, "invalid callback form: "+err.Error())
+			s.renderCallbackError(w, "invalid callback form: "+err.Error())
 			return
 		}
 		q = r.PostForm
@@ -610,7 +626,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	if errStr := q.Get("error"); errStr != "" {
 		desc := q.Get("error_description")
-		renderCallbackError(w, fmt.Sprintf("%s: %s", errStr, desc))
+		s.renderCallbackError(w, fmt.Sprintf("%s: %s", errStr, desc))
 		return
 	}
 
@@ -622,7 +638,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	sess := s.session(r)
 	flowState, ok := sess.takeState(state)
 	if !ok {
-		renderCallbackError(w, "invalid or expired state parameter")
+		s.renderCallbackError(w, "invalid or expired state parameter")
 		return
 	}
 
@@ -638,7 +654,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	result := exchangeCode(cfg.TokenURL, cfg.ClientID, cfg.ClientSecret, code, cfg.RedirectURI, flowState.CodeVerifier, extra)
 	id := sess.addHistory(result, callbackParams)
-	http.Redirect(w, r, "/?flow="+id, http.StatusFound)
+	http.Redirect(w, r, s.basePath+"?flow="+id, http.StatusFound)
 }
 
 // --- Logout ---
@@ -662,12 +678,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	cfg := s.configFor(sess)
 
 	if cfg.EndSessionURL == "" {
-		renderCallbackError(w, "end_session_url not configured")
+		s.renderCallbackError(w, "end_session_url not configured")
 		return
 	}
 	endSession, err := url.Parse(cfg.EndSessionURL)
 	if err != nil {
-		renderCallbackError(w, "invalid end_session_url: "+err.Error())
+		s.renderCallbackError(w, "invalid end_session_url: "+err.Error())
 		return
 	}
 	var state string
@@ -679,7 +695,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	idToken, err := sess.markLogout(r.FormValue("flow"), state, time.Now())
 	if err != nil {
-		renderCallbackError(w, err.Error())
+		s.renderCallbackError(w, err.Error())
 		return
 	}
 
@@ -818,20 +834,21 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-func renderCallbackError(w http.ResponseWriter, msg string) {
+func (s *Server) renderCallbackError(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(400)
+	base := html.EscapeString(s.basePath)
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head><title>Auth Error</title>
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="%sstyle.css">
 </head>
 <body class="error-page">
 <h2>Authentication Error</h2>
 <div class="error-box">%s</div>
-<p><a href="/">← Back to OIDC Test Client</a></p>
+<p><a href="%s">← Back to OIDC Test Client</a></p>
 </body>
-</html>`, html.EscapeString(msg))
+</html>`, base, html.EscapeString(msg), base)
 }
 
 
