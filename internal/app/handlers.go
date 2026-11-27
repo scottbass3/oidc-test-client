@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,17 @@ func (s *Server) registerRoutes() {
 	staticFS, _ := fs.Sub(s.staticFS, "static")
 	fileServer := http.FileServer(http.FS(staticFS))
 	s.mux.Handle("/", fileServer)
+
+	// Under a path prefix the page names it in a <base>: its relative URLs
+	// then resolve under the prefix whatever its own address, with or without
+	// the last "/".
+	if index, err := fs.ReadFile(staticFS, "index.html"); err == nil && s.basePath != "/" {
+		base := "<head>\n  <base href=\"" + html.EscapeString(s.basePath) + "\">"
+		index = bytes.Replace(index, []byte("<head>"), []byte(base), 1)
+		s.mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+			http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
+		})
+	}
 
 	handle := func(route string, h http.HandlerFunc) {
 		s.routes[route] = true

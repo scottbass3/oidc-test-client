@@ -113,14 +113,15 @@ type Options struct {
 	// SessionTTL is how long a locked mode session outlives its last request,
 	// DefaultSessionTTL when zero.
 	SessionTTL time.Duration
-	// WebURL is the public URL of the client, as ParseWebURL returns it, when
+	// WebURL is the public URL of the client, one ParseWebURL accepts, when
 	// it is served under a path of its host or to have the redirect URIs
 	// default to it. Empty, the client is at the root of its host.
 	WebURL string
 }
 
 // ParseWebURL checks v, the public URL of the client, and returns it with a
-// path that ends with "/".
+// path that ends with "/". A path with characters to escape is refused: the
+// path is written as it is in the redirects, the links and the cookie.
 func ParseWebURL(v string) (string, error) {
 	u, err := url.Parse(v)
 	if err != nil {
@@ -136,22 +137,33 @@ func ParseWebURL(v string) (string, error) {
 	if u.Path != "/" {
 		u.Path += "/"
 	}
+	if u.EscapedPath() != u.Path {
+		return "", errors.New("want a path without characters to escape")
+	}
 	return u.String(), nil
 }
 
+// New returns the server of the client. It panics on a WebURL that ParseWebURL
+// refuses.
 func New(opts Options) *Server {
 	ttl := opts.SessionTTL
 	if ttl <= 0 {
 		ttl = DefaultSessionTTL
 	}
-	basePath, cookieName := "/", sessionCookie
-	if u, err := url.Parse(opts.WebURL); err == nil && strings.HasSuffix(u.Path, "/") && u.Path != "/" {
-		basePath, cookieName = u.Path, prefixedSessionCookie
+	basePath, cookieName, webURL := "/", sessionCookie, ""
+	if opts.WebURL != "" {
+		var err error
+		if webURL, err = ParseWebURL(opts.WebURL); err != nil {
+			panic("app.New: WebURL " + opts.WebURL + ": " + err.Error())
+		}
+		if u, _ := url.Parse(webURL); u.Path != "/" {
+			basePath, cookieName = u.Path, prefixedSessionCookie
+		}
 	}
 	s := &Server{
 		mux:        http.NewServeMux(),
 		routes:     make(map[string]bool),
-		config:     NewConfigStore(opts.ConfigFile, opts.Locked, opts.WebURL),
+		config:     NewConfigStore(opts.ConfigFile, opts.Locked, webURL),
 		staticFS:   opts.StaticFS,
 		basePath:   basePath,
 		cookieName: cookieName,
@@ -182,8 +194,9 @@ func (s *Server) Start(addr string) error {
 // session, or give them a new one, behind their back.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.basePath != "/" {
-		// The page calls the server with relative URLs, which only resolve
-		// under the prefix when its own URL ends with "/".
+		// The address of the page ends with "/". Behind a proxy that strips
+		// the prefix this request does not come as such: there, the <base> of
+		// the page has its relative URLs resolve under the prefix all the same.
 		if r.URL.Path+"/" == s.basePath {
 			target := s.basePath
 			if r.URL.RawQuery != "" {

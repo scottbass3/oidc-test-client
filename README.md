@@ -68,8 +68,9 @@ WEB_URL=https://example.com/auth/client/
 ```
 
 - The reverse proxy in front may forward the path as it is (`/auth/client/api/config`) or strip the prefix (`/api/config`): both are accepted.
-- `/auth/client` redirects to `/auth/client/`, and the callback lands back on `/auth/client/?flow=…`.
-- `OIDC_REDIRECT_URI` defaults to `WEB_URL` + `auth/callback` and `OIDC_POST_LOGOUT_REDIRECT_URI` to `WEB_URL`, when neither the environment nor the config file sets them.
+- `/auth/client` redirects to `/auth/client/` when the proxy forwards the path; when it strips the prefix, the page is served at `/auth/client` and works there too. The callback lands back on `/auth/client/?flow=…`.
+- `OIDC_REDIRECT_URI` defaults to `WEB_URL` + `auth/callback` and `OIDC_POST_LOGOUT_REDIRECT_URI` to `WEB_URL`, when neither the environment nor the config file sets them. The defaults are not saved to the config file: they follow `WEB_URL` when it changes.
+- The path of `WEB_URL` has no character that needs escaping (a space, `%3F`…).
 - In [locked mode](#locked-mode), the session cookie is bound to the prefix: it is named `__Secure-oidc-test-client` instead of `__Host-oidc-test-client`, as the `__Host-` prefix only allows the path `/`. The other applications of the host are the same origin as the client: the checks on the origin of a request and the Content-Security-Policy do not tell them apart from it.
 
 Without `WEB_URL`, nothing changes.

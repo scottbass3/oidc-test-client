@@ -14,6 +14,11 @@ document.addEventListener('DOMContentLoaded', () => {
   initActions();
   loadConfig();
 
+  // The callback of this instance, under its path prefix when it has one.
+  const callbackURL = new URL('auth/callback', document.baseURI).href;
+  document.getElementById('flow-callback-url').textContent = callbackURL;
+  document.getElementById('cfg-redirect-uri').placeholder = callbackURL;
+
   const params = new URLSearchParams(window.location.search);
   const flowId = params.get('flow');
   if (flowId) {

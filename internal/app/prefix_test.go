@@ -18,7 +18,7 @@ func newPrefixedServer(t *testing.T, p *provider, webURL string) *Server {
 	newLockedServer(t, p) // sets the environment
 	t.Setenv("OIDC_REDIRECT_URI", "")
 	static := fstest.MapFS{
-		"static/index.html": {Data: []byte("<html>index</html>")},
+		"static/index.html": {Data: []byte("<html><head></head>index</html>")},
 		"static/style.css":  {Data: []byte("body{}")},
 	}
 	return New(Options{StaticFS: static, ConfigFile: filepath.Join(t.TempDir(), "config.json"), Locked: true, WebURL: webURL})
@@ -36,6 +36,9 @@ func TestPrefix(t *testing.T) {
 				if rec := b.do(http.MethodGet, base+static, ""); rec.Code != 200 {
 					t.Errorf("GET %s: status %d", base+static, rec.Code)
 				}
+			}
+			if body := b.do(http.MethodGet, base+"/", "").Body.String(); !strings.Contains(body, `<head>`+"\n"+`  <base href="/auth/client/">`) {
+				t.Errorf("page without the <base> of the prefix: %s", body)
 			}
 
 			var cfg Config
@@ -167,9 +170,54 @@ func TestParseWebURL(t *testing.T) {
 			t.Errorf("ParseWebURL(%q) = %q, %v, want %q", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"example.com/auth", "/auth/client/", "ftp://example.com/", "https://example.com/?a=b", "https://example.com/#top", "https://u:p@example.com/"} {
+	for _, in := range []string{"example.com/auth", "/auth/client/", "ftp://example.com/", "https://example.com/?a=b", "https://example.com/#top", "https://u:p@example.com/",
+		"https://example.com/a%3Fb/", "https://example.com/a b/"} {
 		if got, err := ParseWebURL(in); err == nil {
 			t.Errorf("ParseWebURL(%q) = %q, want an error", in, got)
 		}
+	}
+}
+
+// New takes a WebURL as it is typed, and refuses one ParseWebURL refuses.
+func TestNewNormalizesWebURL(t *testing.T) {
+	s := New(Options{StaticFS: fstest.MapFS{}, ConfigFile: filepath.Join(t.TempDir(), "config.json"), WebURL: "https://example.com/auth/client"})
+	if s.basePath != "/auth/client/" || s.config.Get().RedirectURI != testWebURL+"auth/callback" {
+		t.Errorf("basePath = %q, redirect_uri = %q", s.basePath, s.config.Get().RedirectURI)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("New accepted a WebURL without a scheme")
+		}
+	}()
+	New(Options{StaticFS: fstest.MapFS{}, WebURL: "example.com/auth"})
+}
+
+// The defaults under WEB_URL are not saved with the configuration: they
+// follow WEB_URL when it changes, and a redirect URI of the tester's is kept.
+func TestWebURLDefaultsAreNotSaved(t *testing.T) {
+	for _, k := range []string{"OIDC_REDIRECT_URI", "OIDC_POST_LOGOUT_REDIRECT_URI"} {
+		t.Setenv(k, "")
+	}
+	file := filepath.Join(t.TempDir(), "config.json")
+	open := func(webURL string) *Server {
+		return New(Options{StaticFS: fstest.MapFS{}, ConfigFile: file, WebURL: webURL})
+	}
+
+	// The page posts back the configuration it was given, defaults included.
+	s := open("https://a.example/app/")
+	cfg := s.config.Get()
+	cfg.ClientID = "client"
+	s.config.Set(cfg)
+
+	cfg = open("https://b.example/").config.Get()
+	if cfg.ClientID != "client" || cfg.RedirectURI != "https://b.example/auth/callback" || cfg.PostLogoutRedirectURI != "https://b.example/" {
+		t.Errorf("after a change of WEB_URL: %+v", cfg)
+	}
+
+	cfg.RedirectURI = "https://other.example/cb"
+	s = open("https://b.example/")
+	s.config.Set(cfg)
+	if got := open("https://c.example/").config.Get().RedirectURI; got != "https://other.example/cb" {
+		t.Errorf("redirect_uri of the tester = %q", got)
 	}
 }
