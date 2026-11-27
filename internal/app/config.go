@@ -77,10 +77,11 @@ func (c *Config) setTunables(from Config) {
 
 // In locked mode the extra parameters leave alone what the client sets itself
 // in a request: the client and its redirect URI, what ties the request to the
-// session and, at the token endpoint, the grant, which would otherwise let a
-// tester ask for one in the client's own name.
+// session, the request object, whose values take precedence over all of these
+// (OIDC Core 6.1), and, at the token endpoint, the grant, which would
+// otherwise let a tester ask for one in the client's own name.
 var (
-	fixedAuthorizeParams = []string{"client_id", "redirect_uri", "state", "nonce"}
+	fixedAuthorizeParams = []string{"client_id", "redirect_uri", "state", "nonce", "request", "request_uri"}
 	fixedTokenParams     = []string{"client_id", "client_secret", "client_assertion", "client_assertion_type",
 		"redirect_uri", "grant_type", "code", "refresh_token"}
 )

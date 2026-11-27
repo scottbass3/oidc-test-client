@@ -52,6 +52,10 @@ type HistoryEntry struct {
 	// LogoutState the state sent with it, to check the one coming back.
 	LoggedOutAt *time.Time `json:"logged_out_at,omitempty"`
 	LogoutState string     `json:"logout_state,omitempty"`
+
+	// signedIn is whether the provider issued a token for the flow, which takes
+	// a real sign-in, unlike a failed exchange that anyone can have recorded.
+	signedIn bool
 }
 
 // session is what the client keeps for one browser: the states waiting for
@@ -260,9 +264,9 @@ func (s *Server) dropExpired(now time.Time) {
 }
 
 // evict drops the session that loses least: one that keeps nothing, as a
-// request without a cookie opens, before one with settings or pending states,
-// before one with a history, and among those the one seen longest ago. The
-// caller holds sessionsMu.
+// request without a cookie opens, before one with settings, pending states or
+// only failed flows, before one with a flow that signed in, and among those
+// the one seen longest ago. The caller holds sessionsMu.
 func (s *Server) evict() {
 	var victim string
 	var worth int
@@ -276,15 +280,17 @@ func (s *Server) evict() {
 	delete(s.sessions, victim)
 }
 
-// worth ranks what a session would lose if dropped: 0 nothing, 1 settings or
-// pending states, 2 a history.
+// worth ranks what a session would lose if dropped: 0 nothing, 1 settings,
+// pending states or a history of failed flows, 2 a flow that signed in.
 func (sess *session) worth() int {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	switch {
-	case len(sess.history) > 0:
-		return 2
-	case sess.settings != nil || len(sess.states) > 0:
+	for _, e := range sess.history {
+		if e.signedIn {
+			return 2
+		}
+	}
+	if len(sess.history) > 0 || sess.settings != nil || len(sess.states) > 0 {
 		return 1
 	}
 	return 0
@@ -339,6 +345,7 @@ func (sess *session) addHistory(result *OIDCResult, callbackParams map[string]st
 		Result:         result,
 		CallbackParams: callbackParams,
 		IDTokenClaims:  idTokenClaims(idTokenOfResult(result)),
+		signedIn:       tokensIssued(result),
 	}
 	sess.mu.Lock()
 	sess.history = append(sess.history, entry)

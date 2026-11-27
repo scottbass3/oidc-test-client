@@ -769,6 +769,22 @@ func idTokenOfResult(res *OIDCResult) string {
 	return body.IDToken
 }
 
+// tokensIssued reports whether res is a successful token response with a
+// token in it.
+func tokensIssued(res *OIDCResult) bool {
+	if res == nil || res.Response == nil || res.Response.Status/100 != 2 {
+		return false
+	}
+	var body struct {
+		AccessToken string `json:"access_token"`
+		IDToken     string `json:"id_token"`
+	}
+	if err := json.Unmarshal([]byte(res.Response.Body), &body); err != nil {
+		return false
+	}
+	return body.AccessToken != "" || body.IDToken != ""
+}
+
 // --- History ---
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {

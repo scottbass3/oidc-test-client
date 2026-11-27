@@ -36,6 +36,11 @@ func newProvider(t *testing.T) *provider {
 		switch r.URL.Path {
 		case "/token":
 			_ = r.ParseForm()
+			if r.Form.Get("code") == "invalid" {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+				return
+			}
 			// The id_token names the code, to tell the flows apart.
 			_ = json.NewEncoder(w).Encode(map[string]string{"id_token": "id-" + r.Form.Get("code"), "access_token": "at"})
 		case "/.well-known/openid-configuration":
@@ -523,10 +528,12 @@ func TestLockedExtrasLeaveTheFixedParameters(t *testing.T) {
 	alice := &browser{t: t, s: s}
 
 	for body, field := range map[string]string{
-		`{"extra_authorize_params":{"client_id":"other"}}`:                   "extra_authorize_params.client_id",
-		`{"extra_authorize_params":{"redirect_uri":"https://evil.example"}}`: "extra_authorize_params.redirect_uri",
-		`{"extra_token_params":{"grant_type":"client_credentials"}}`:         "extra_token_params.grant_type",
-		`{"extra_token_params":{"client_secret":"guess"}}`:                   "extra_token_params.client_secret",
+		`{"extra_authorize_params":{"client_id":"other"}}`:                    "extra_authorize_params.client_id",
+		`{"extra_authorize_params":{"redirect_uri":"https://evil.example"}}`:  "extra_authorize_params.redirect_uri",
+		`{"extra_authorize_params":{"request":"eyJhbGciOiJub25lIn0.e30."}}`:   "extra_authorize_params.request",
+		`{"extra_authorize_params":{"request_uri":"https://evil.example/r"}}`: "extra_authorize_params.request_uri",
+		`{"extra_token_params":{"grant_type":"client_credentials"}}`:          "extra_token_params.grant_type",
+		`{"extra_token_params":{"client_secret":"guess"}}`:                    "extra_token_params.client_secret",
 	} {
 		var out map[string]string
 		alice.json(http.MethodPost, "/api/config", body, http.StatusForbidden, &out)
@@ -540,13 +547,14 @@ func TestLockedExtrasLeaveTheFixedParameters(t *testing.T) {
 		State string `json:"state"`
 	}
 	alice.json(http.MethodPost, "/api/authorize-url",
-		`{"extra_params":{"client_id":"other","redirect_uri":"https://evil.example/cb","state":"forced","prompt":"login"}}`, 200, &out)
+		`{"extra_params":{"client_id":"other","redirect_uri":"https://evil.example/cb","state":"forced","request":"eyJhbGciOiJub25lIn0.e30.","request_uri":"https://evil.example/r","prompt":"login"}}`, 200, &out)
 	u, err := url.Parse(out.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q := u.Query(); q.Get("client_id") != "client" || q.Get("redirect_uri") != fixed.RedirectURI || q.Get("state") != out.State || q.Get("prompt") != "login" {
-		t.Errorf("URL %s, want the fixed client, redirect URI and state, and the prompt", out.URL)
+	if q := u.Query(); q.Get("client_id") != "client" || q.Get("redirect_uri") != fixed.RedirectURI || q.Get("state") != out.State ||
+		q.Has("request") || q.Has("request_uri") || q.Get("prompt") != "login" {
+		t.Errorf("URL %s, want the fixed client, redirect URI and state, no request object, and the prompt", out.URL)
 	}
 
 	extra := `"extra_params":{"grant_type":"client_credentials","client_id":"other","redirect_uri":"https://evil.example/cb","resource":"api"}`
@@ -677,6 +685,42 @@ func TestLockedBounds(t *testing.T) {
 	if last.cookie == nil || sessions() != maxSessions || live(carol) || !live(later) {
 		t.Errorf("an expired session did not leave its place: cookie %v, %d sessions, carol live %v, later %v",
 			last.cookie, sessions(), live(carol), live(later))
+	}
+}
+
+// Failed flows, that anyone can have recorded without signing in, do not keep
+// a session over one whose flow signed in.
+func TestLockedEvictionWeighsSignedInFlows(t *testing.T) {
+	s := newLockedServer(t, newProvider(t))
+	sessions := func() int {
+		s.sessionsMu.Lock()
+		defer s.sessionsMu.Unlock()
+		return len(s.sessions)
+	}
+	live := func(b *browser) bool {
+		s.sessionsMu.Lock()
+		defer s.sessionsMu.Unlock()
+		_, ok := s.sessions[b.cookie.Value]
+		return ok
+	}
+
+	carol, mallory := &browser{t: t, s: s}, &browser{t: t, s: s}
+	carol.flow("carol")
+	mallory.flow("invalid")
+	if len(mallory.history()) != 1 {
+		t.Fatal("the failed flow is not in the history")
+	}
+	for sessions() < maxSessions {
+		(&browser{t: t, s: s}).flow("invalid")
+	}
+	s.sessionsMu.Lock()
+	s.sessions[carol.cookie.Value].seen = time.Now().Add(-time.Hour)
+	s.sessionsMu.Unlock()
+
+	(&browser{t: t, s: s}).flow("invalid")
+	if !live(carol) || live(mallory) {
+		t.Errorf("carol live %v, mallory %v, want the oldest session of failed flows gone, not the one that signed in",
+			live(carol), live(mallory))
 	}
 }
 
