@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -47,14 +48,95 @@ type ConfigStore struct {
 	filepath string
 }
 
-func NewConfigStore(filepath string) *ConfigStore {
+// NewConfigStore reads the configuration from the file, then the environment.
+// Locked, the file is left out: the provider and the client come from the
+// environment only.
+func NewConfigStore(filepath string, locked bool) *ConfigStore {
 	cs := &ConfigStore{
 		config:   defaultConfig(),
 		filepath: filepath,
 	}
-	cs.loadFromFile()
+	if !locked {
+		cs.loadFromFile()
+	}
 	cs.loadFromEnv()
 	return cs
+}
+
+// setTunables copies from from the settings a tester tunes in locked mode,
+// the ones that are not part of the provider or of the client's registration.
+func (c *Config) setTunables(from Config) {
+	c.Scopes = from.Scopes
+	c.ResponseType = from.ResponseType
+	c.ResponseMode = from.ResponseMode
+	c.PKCEEnabled = from.PKCEEnabled
+	c.PKCEMethod = from.PKCEMethod
+	c.ExtraAuthorizeParams = from.ExtraAuthorizeParams
+	c.ExtraTokenParams = from.ExtraTokenParams
+}
+
+// In locked mode the extra parameters leave alone what the client sets itself
+// in a request: the client and its redirect URI, what ties the request to the
+// session, the request object, whose values take precedence over all of these
+// (OIDC Core 6.1), and, at the token endpoint, the grant, which would
+// otherwise let a tester ask for one in the client's own name.
+var (
+	fixedAuthorizeParams = []string{"client_id", "redirect_uri", "state", "nonce", "request", "request_uri"}
+	fixedTokenParams     = []string{"client_id", "client_secret", "client_assertion", "client_assertion_type",
+		"redirect_uri", "grant_type", "code", "refresh_token"}
+)
+
+// withoutParams returns extra without the parameters named by fixed.
+func withoutParams(extra map[string]string, fixed []string) map[string]string {
+	out := make(map[string]string, len(extra))
+	for k, v := range extra {
+		if !slices.Contains(fixed, k) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// lockedChange names the first field of posted that locked mode refuses, ""
+// when there is none: a provider endpoint or a client field that differs from
+// the fixed one, any client secret, so that the answer does not tell whether
+// a guess is right, or an extra parameter that would replace one the client
+// sets itself. An empty field asks for no change.
+func lockedChange(posted, fixed Config) string {
+	if posted.ClientSecret != "" {
+		return "client_secret"
+	}
+	for _, f := range []struct{ name, posted, fixed string }{
+		{"issuer_url", posted.IssuerURL, fixed.IssuerURL},
+		{"authorization_url", posted.AuthorizationURL, fixed.AuthorizationURL},
+		{"token_url", posted.TokenURL, fixed.TokenURL},
+		{"userinfo_url", posted.UserinfoURL, fixed.UserinfoURL},
+		{"introspection_url", posted.IntrospectionURL, fixed.IntrospectionURL},
+		{"jwks_uri", posted.JWKSURI, fixed.JWKSURI},
+		{"end_session_url", posted.EndSessionURL, fixed.EndSessionURL},
+		{"client_id", posted.ClientID, fixed.ClientID},
+		{"redirect_uri", posted.RedirectURI, fixed.RedirectURI},
+		{"post_logout_redirect_uri", posted.PostLogoutRedirectURI, fixed.PostLogoutRedirectURI},
+	} {
+		if f.posted != "" && f.posted != f.fixed {
+			return f.name
+		}
+	}
+	for _, e := range []struct {
+		name  string
+		extra map[string]string
+		fixed []string
+	}{
+		{"extra_authorize_params", posted.ExtraAuthorizeParams, fixedAuthorizeParams},
+		{"extra_token_params", posted.ExtraTokenParams, fixedTokenParams},
+	} {
+		for _, k := range e.fixed {
+			if _, ok := e.extra[k]; ok {
+				return e.name + "." + k
+			}
+		}
+	}
+	return ""
 }
 
 func (cs *ConfigStore) Get() Config {
@@ -94,6 +176,9 @@ func (cs *ConfigStore) loadFromEnv() {
 	}
 	if v := os.Getenv("OIDC_INTROSPECTION_URL"); v != "" {
 		cs.config.IntrospectionURL = v
+	}
+	if v := os.Getenv("OIDC_JWKS_URI"); v != "" {
+		cs.config.JWKSURI = v
 	}
 	if v := os.Getenv("OIDC_END_SESSION_URL"); v != "" {
 		cs.config.EndSessionURL = v

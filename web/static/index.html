@@ -10,6 +10,7 @@
   <header>
     <span class="logo">⬡ OIDC Test Client</span>
     <span class="subtitle">OAuth2 / OpenID Connect Debugger</span>
+    <span id="locked-badge" class="locked-badge" title="The provider and the client are set on the server. The history and the settings are this browser's." hidden>Locked</span>
     <span id="session-badge" class="session-badge"></span>
   </header>
 
@@ -40,7 +41,7 @@
         <div class="config-summary" id="flow-summary"></div>
 
         <div class="actions">
-          <button class="btn-primary btn-large" onclick="startFlow()">Start Authorization Flow</button>
+          <button class="btn-primary btn-large" data-action="start-flow">Start Authorization Flow</button>
         </div>
       </div>
 
@@ -62,36 +63,40 @@
 
     <!-- CONFIG TAB -->
     <div id="tab-config" class="tab-content">
+      <p id="locked-note" class="hint-text" hidden>
+        Locked mode: the provider endpoints and the client are set on the server and cannot be changed here.
+        The request defaults, PKCE and extra parameters below are saved for this browser's session only.
+      </p>
       <div class="panel">
         <h3>Provider Endpoints</h3>
         <div class="form-row">
           <label>Issuer URL</label>
-          <input type="text" id="cfg-issuer-url" placeholder="https://accounts.example.com">
-          <button class="btn-secondary" onclick="discoverAndUpdate()">Auto-discover</button>
+          <input type="text" id="cfg-issuer-url" data-fixed placeholder="https://accounts.example.com">
+          <button class="btn-secondary" data-action="discover-update" data-fixed>Auto-discover</button>
         </div>
         <div class="form-row">
           <label>Authorization URL</label>
-          <input type="text" id="cfg-auth-url" placeholder="https://accounts.example.com/oauth2/authorize">
+          <input type="text" id="cfg-auth-url" data-fixed placeholder="https://accounts.example.com/oauth2/authorize">
         </div>
         <div class="form-row">
           <label>Token URL</label>
-          <input type="text" id="cfg-token-url" placeholder="https://accounts.example.com/oauth2/token">
+          <input type="text" id="cfg-token-url" data-fixed placeholder="https://accounts.example.com/oauth2/token">
         </div>
         <div class="form-row">
           <label>UserInfo URL</label>
-          <input type="text" id="cfg-userinfo-url" placeholder="https://accounts.example.com/oauth2/userinfo">
+          <input type="text" id="cfg-userinfo-url" data-fixed placeholder="https://accounts.example.com/oauth2/userinfo">
         </div>
         <div class="form-row">
           <label>Introspection URL</label>
-          <input type="text" id="cfg-introspection-url" placeholder="https://accounts.example.com/oauth2/introspect">
+          <input type="text" id="cfg-introspection-url" data-fixed placeholder="https://accounts.example.com/oauth2/introspect">
         </div>
         <div class="form-row">
           <label>End Session URL</label>
-          <input type="text" id="cfg-end-session-url" placeholder="https://accounts.example.com/oauth2/logout">
+          <input type="text" id="cfg-end-session-url" data-fixed placeholder="https://accounts.example.com/oauth2/logout">
         </div>
         <div class="form-row">
           <label>JWKS URI</label>
-          <input type="text" id="cfg-jwks-uri" placeholder="https://accounts.example.com/oauth2/jwks">
+          <input type="text" id="cfg-jwks-uri" data-fixed placeholder="https://accounts.example.com/oauth2/jwks">
         </div>
       </div>
 
@@ -99,20 +104,20 @@
         <h3>Client</h3>
         <div class="form-row">
           <label>Client ID</label>
-          <input type="text" id="cfg-client-id" placeholder="my-client">
+          <input type="text" id="cfg-client-id" data-fixed placeholder="my-client">
         </div>
         <div class="form-row">
           <label>Client Secret</label>
-          <input type="password" id="cfg-client-secret" placeholder="••••••••">
-          <button class="btn-secondary" onclick="toggleSecret('cfg-client-secret')">Show</button>
+          <input type="password" id="cfg-client-secret" data-fixed placeholder="••••••••">
+          <button class="btn-secondary" data-action="toggle-secret" data-target="cfg-client-secret" data-fixed>Show</button>
         </div>
         <div class="form-row">
           <label>Redirect URI</label>
-          <input type="text" id="cfg-redirect-uri" placeholder="http://localhost:8080/auth/callback">
+          <input type="text" id="cfg-redirect-uri" data-fixed placeholder="http://localhost:8080/auth/callback">
         </div>
         <div class="form-row">
           <label>Post Logout Redirect URI</label>
-          <input type="text" id="cfg-post-logout-redirect-uri" placeholder="http://localhost:8080/">
+          <input type="text" id="cfg-post-logout-redirect-uri" data-fixed placeholder="http://localhost:8080/">
         </div>
       </div>
 
@@ -148,7 +153,7 @@
         <h3>PKCE</h3>
         <div class="form-row">
           <label>Enable PKCE</label>
-          <input type="checkbox" id="cfg-pkce-enabled" style="width:auto">
+          <input type="checkbox" id="cfg-pkce-enabled" class="auto-width">
         </div>
         <div class="form-row">
           <label>PKCE Method</label>
@@ -172,7 +177,7 @@
       </div>
 
       <div class="actions">
-        <button class="btn-primary" onclick="saveConfig()">Save Configuration</button>
+        <button class="btn-primary" data-action="save-config">Save Configuration</button>
         <span id="config-status" class="status-msg"></span>
       </div>
     </div>
@@ -183,11 +188,11 @@
         <h3>OIDC Discovery</h3>
         <div class="form-row">
           <label>Issuer URL</label>
-          <input type="text" id="disc-issuer-url" placeholder="https://accounts.example.com">
+          <input type="text" id="disc-issuer-url" data-fixed placeholder="https://accounts.example.com">
         </div>
         <div class="actions">
-          <button class="btn-primary" onclick="runDiscovery(false)">Fetch Discovery</button>
-          <button class="btn-secondary" onclick="runDiscovery(true)">Fetch &amp; Update Config</button>
+          <button class="btn-primary" data-action="discover">Fetch Discovery</button>
+          <button class="btn-secondary" data-action="discover-update-config" data-fixed>Fetch &amp; Update Config</button>
         </div>
       </div>
       <div id="disc-result" class="result-area hidden"></div>
@@ -199,15 +204,15 @@
         <h3>Authorization Request</h3>
         <div class="form-row">
           <label>Authorization URL</label>
-          <input type="text" id="auth-url" placeholder="from config">
+          <input type="text" id="auth-url" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Client ID</label>
-          <input type="text" id="auth-client-id" placeholder="from config">
+          <input type="text" id="auth-client-id" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Redirect URI</label>
-          <input type="text" id="auth-redirect-uri" placeholder="from config">
+          <input type="text" id="auth-redirect-uri" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Scopes</label>
@@ -224,12 +229,12 @@
         <div class="form-row">
           <label>State</label>
           <input type="text" id="auth-state" placeholder="auto-generated">
-          <button class="btn-secondary" onclick="genRandom('auth-state', 16)">Generate</button>
+          <button class="btn-secondary" data-action="gen-random" data-target="auth-state">Generate</button>
         </div>
         <div class="form-row">
           <label>Nonce</label>
           <input type="text" id="auth-nonce" placeholder="auto-generated">
-          <button class="btn-secondary" onclick="genRandom('auth-nonce', 16)">Generate</button>
+          <button class="btn-secondary" data-action="gen-random" data-target="auth-nonce">Generate</button>
         </div>
       </div>
 
@@ -241,12 +246,12 @@
             <option value="S256">S256</option>
             <option value="plain">plain</option>
           </select>
-          <button class="btn-secondary" onclick="generatePKCE()">Generate PKCE</button>
+          <button class="btn-secondary" data-action="generate-pkce">Generate PKCE</button>
         </div>
         <div class="form-row">
           <label>Code Verifier</label>
           <input type="text" id="auth-code-verifier" placeholder="generate above">
-          <button class="btn-secondary" onclick="copyField('auth-code-verifier')">Copy</button>
+          <button class="btn-secondary" data-action="copy-field" data-target="auth-code-verifier">Copy</button>
         </div>
         <div class="form-row">
           <label>Code Challenge</label>
@@ -264,7 +269,7 @@
       </div>
 
       <div class="actions">
-        <button class="btn-primary" onclick="buildAuthorizeURL()">Build URL</button>
+        <button class="btn-primary" data-action="build-authorize-url">Build URL</button>
       </div>
       <div id="auth-result" class="result-area hidden"></div>
     </div>
@@ -275,16 +280,16 @@
         <h3>Authorization Code Exchange</h3>
         <div class="form-row">
           <label>Token URL</label>
-          <input type="text" id="tok-token-url" placeholder="from config">
+          <input type="text" id="tok-token-url" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Client ID</label>
-          <input type="text" id="tok-client-id" placeholder="from config">
+          <input type="text" id="tok-client-id" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Client Secret</label>
-          <input type="password" id="tok-client-secret" placeholder="from config">
-          <button class="btn-secondary" onclick="toggleSecret('tok-client-secret')">Show</button>
+          <input type="password" id="tok-client-secret" data-fixed placeholder="from config">
+          <button class="btn-secondary" data-action="toggle-secret" data-target="tok-client-secret" data-fixed>Show</button>
         </div>
         <div class="form-row">
           <label>Authorization Code</label>
@@ -292,12 +297,12 @@
         </div>
         <div class="form-row">
           <label>Redirect URI</label>
-          <input type="text" id="tok-redirect-uri" placeholder="from config">
+          <input type="text" id="tok-redirect-uri" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Code Verifier (PKCE)</label>
           <input type="text" id="tok-code-verifier" placeholder="from authorize tab">
-          <button class="btn-secondary" onclick="copyFromAuthorize()">Copy from Authorize</button>
+          <button class="btn-secondary" data-action="copy-verifier">Copy from Authorize</button>
         </div>
       </div>
       <div class="panel">
@@ -305,7 +310,7 @@
         <textarea id="tok-extra-params" rows="3" placeholder='{"resource": "api://..."}'></textarea>
       </div>
       <div class="actions">
-        <button class="btn-primary" onclick="exchangeToken()">Exchange Code</button>
+        <button class="btn-primary" data-action="exchange-token">Exchange Code</button>
       </div>
       <div id="tok-result" class="result-area hidden"></div>
     </div>
@@ -316,16 +321,16 @@
         <h3>Refresh Token</h3>
         <div class="form-row">
           <label>Token URL</label>
-          <input type="text" id="ref-token-url" placeholder="from config">
+          <input type="text" id="ref-token-url" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Client ID</label>
-          <input type="text" id="ref-client-id" placeholder="from config">
+          <input type="text" id="ref-client-id" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Client Secret</label>
-          <input type="password" id="ref-client-secret" placeholder="from config">
-          <button class="btn-secondary" onclick="toggleSecret('ref-client-secret')">Show</button>
+          <input type="password" id="ref-client-secret" data-fixed placeholder="from config">
+          <button class="btn-secondary" data-action="toggle-secret" data-target="ref-client-secret" data-fixed>Show</button>
         </div>
         <div class="form-row">
           <label>Refresh Token</label>
@@ -337,7 +342,7 @@
         <textarea id="ref-extra-params" rows="3" placeholder='{"scope": "openid profile"}'></textarea>
       </div>
       <div class="actions">
-        <button class="btn-primary" onclick="doRefresh()">Refresh Token</button>
+        <button class="btn-primary" data-action="refresh-token">Refresh Token</button>
       </div>
       <div id="ref-result" class="result-area hidden"></div>
     </div>
@@ -348,7 +353,7 @@
         <h3>UserInfo Request</h3>
         <div class="form-row">
           <label>UserInfo URL</label>
-          <input type="text" id="ui-userinfo-url" placeholder="from config">
+          <input type="text" id="ui-userinfo-url" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Access Token</label>
@@ -356,7 +361,7 @@
         </div>
       </div>
       <div class="actions">
-        <button class="btn-primary" onclick="fetchUserInfo()">Fetch UserInfo</button>
+        <button class="btn-primary" data-action="userinfo">Fetch UserInfo</button>
       </div>
       <div id="ui-result" class="result-area hidden"></div>
     </div>
@@ -367,16 +372,16 @@
         <h3>Token Introspection</h3>
         <div class="form-row">
           <label>Introspection URL</label>
-          <input type="text" id="intr-url" placeholder="from config">
+          <input type="text" id="intr-url" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Client ID</label>
-          <input type="text" id="intr-client-id" placeholder="from config">
+          <input type="text" id="intr-client-id" data-fixed placeholder="from config">
         </div>
         <div class="form-row">
           <label>Client Secret</label>
-          <input type="password" id="intr-client-secret" placeholder="from config">
-          <button class="btn-secondary" onclick="toggleSecret('intr-client-secret')">Show</button>
+          <input type="password" id="intr-client-secret" data-fixed placeholder="from config">
+          <button class="btn-secondary" data-action="toggle-secret" data-target="intr-client-secret" data-fixed>Show</button>
         </div>
         <div class="form-row">
           <label>Token</label>
@@ -393,7 +398,7 @@
         </div>
       </div>
       <div class="actions">
-        <button class="btn-primary" onclick="doIntrospect()">Introspect</button>
+        <button class="btn-primary" data-action="introspect">Introspect</button>
       </div>
       <div id="intr-result" class="result-area hidden"></div>
     </div>
@@ -409,7 +414,7 @@
         </div>
       </div>
       <div class="actions">
-        <button class="btn-primary" onclick="decodeJWT()">Decode</button>
+        <button class="btn-primary" data-action="decode-jwt">Decode</button>
       </div>
       <div id="jwt-result" class="result-area hidden"></div>
     </div>

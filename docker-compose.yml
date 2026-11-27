@@ -15,6 +15,10 @@ services:
       # OIDC_USERINFO_URL: ""
       # OIDC_INTROSPECTION_URL: ""
       #
+      # Shared deployment: fix the provider and the client to the variables
+      # above, and give each browser its own session. Needs HTTPS in front.
+      # LOCKED: "true"
+      #
       # Path to a startup script run before the app starts.
       # The script is sourced (not executed), so env vars it sets propagate.
       # STARTUP_SCRIPT: /startup.sh

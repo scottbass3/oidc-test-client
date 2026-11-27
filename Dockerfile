@@ -1,11 +1,11 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.27-alpine AS builder
 WORKDIR /build
 COPY go.mod ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o oidc-test-client ./cmd/
 
-FROM alpine:3.19
+FROM alpine:3.24
 RUN apk --no-cache add ca-certificates tzdata jq
 WORKDIR /app
 COPY --from=builder /build/oidc-test-client /app/oidc-test-client
