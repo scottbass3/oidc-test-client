@@ -140,7 +140,7 @@ func TestLogout(t *testing.T) {
 
 func TestRenderCallbackErrorEscapes(t *testing.T) {
 	rec := httptest.NewRecorder()
-	renderCallbackError(rec, `invalid end_session_url: parse "http://%zz<script>x</script>"`)
+	newTestServer(t, Config{}).renderCallbackError(rec, `invalid end_session_url: parse "http://%zz<script>x</script>"`)
 	if body := rec.Body.String(); strings.Contains(body, "<script>") {
 		t.Errorf("message not escaped: %s", body)
 	}

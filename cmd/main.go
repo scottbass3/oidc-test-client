@@ -37,16 +37,28 @@ func main() {
 		}
 	}
 
+	var webURL string
+	if v := os.Getenv("WEB_URL"); v != "" {
+		var err error
+		if webURL, err = app.ParseWebURL(v); err != nil {
+			log.Fatalf("WEB_URL=%q: %v", v, err)
+		}
+	}
+
 	srv := app.New(app.Options{
 		StaticFS:   web.Static,
 		ConfigFile: configFile,
 		Locked:     locked,
 		SessionTTL: sessionTTL,
+		WebURL:     webURL,
 	})
 
 	addr := ":" + port
 	if locked {
 		log.Printf("Locked mode: provider and client fixed by the environment, one session per browser")
+	}
+	if webURL != "" {
+		log.Printf("Served at %s", webURL)
 	}
 	log.Printf("Starting OIDC test client on %s", addr)
 	if err := srv.Start(addr); err != nil {

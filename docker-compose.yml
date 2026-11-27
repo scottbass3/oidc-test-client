@@ -15,6 +15,10 @@ services:
       # OIDC_USERINFO_URL: ""
       # OIDC_INTROSPECTION_URL: ""
       #
+      # Serve the client under a path of an existing host (the proxy may strip
+      # the prefix or not). The redirect URIs default to it.
+      # WEB_URL: "https://example.com/auth/client/"
+      #
       # Shared deployment: fix the provider and the client to the variables
       # above, and give each browser its own session. Needs HTTPS in front.
       # LOCKED: "true"

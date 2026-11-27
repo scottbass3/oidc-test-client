@@ -17,12 +17,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const params = new URLSearchParams(window.location.search);
   const flowId = params.get('flow');
   if (flowId) {
-    window.history.replaceState({}, '', '/');
+    window.history.replaceState({}, '', window.location.pathname);
     switchTab('history');
     loadHistory(flowId);
   } else if (params.has('state')) {
     // Back from the provider after a logout (post_logout_redirect_uri).
-    window.history.replaceState({}, '', '/');
+    window.history.replaceState({}, '', window.location.pathname);
     switchTab('history');
     checkLogoutState(params.get('state'));
   } else {
@@ -76,7 +76,7 @@ function initActions() {
 
 async function loadConfig() {
   try {
-    const res = await fetch('/api/config');
+    const res = await fetch('api/config');
     const cfg = await res.json();
     state.config = cfg;
     applyLocked(cfg.locked);
@@ -167,7 +167,7 @@ async function saveConfig() {
     cfg = Object.fromEntries(tunables.map(k => [k, cfg[k]]));
   }
   try {
-    const res = await fetch('/api/config', {
+    const res = await fetch('api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cfg),
@@ -215,7 +215,7 @@ async function discoverAndUpdate() {
     return;
   }
   try {
-    const res = await fetch('/api/discover', {
+    const res = await fetch('api/discover', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ issuer_url: issuerURL, update_config: true }),
@@ -243,7 +243,7 @@ async function runDiscovery(updateConfig) {
     return;
   }
   try {
-    const res = await fetch('/api/discover', {
+    const res = await fetch('api/discover', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ issuer_url: issuerURL, update_config: updateConfig }),
@@ -261,7 +261,7 @@ async function runDiscovery(updateConfig) {
 async function generatePKCE() {
   const method = getVal('auth-pkce-method');
   try {
-    const res = await fetch('/api/pkce/generate', {
+    const res = await fetch('api/pkce/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ method }),
@@ -296,7 +296,7 @@ async function buildAuthorizeURL() {
   };
 
   try {
-    const res = await fetch('/api/authorize-url', {
+    const res = await fetch('api/authorize-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -374,7 +374,7 @@ async function exchangeToken() {
     extra_params: extraParams,
   };
   try {
-    const res = await fetch('/api/token/exchange', {
+    const res = await fetch('api/token/exchange', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -399,7 +399,7 @@ async function doRefresh() {
     extra_params: extraParams,
   };
   try {
-    const res = await fetch('/api/token/refresh', {
+    const res = await fetch('api/token/refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -420,7 +420,7 @@ async function fetchUserInfo() {
     access_token: getVal('ui-access-token'),
   };
   try {
-    const res = await fetch('/api/userinfo', {
+    const res = await fetch('api/userinfo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -443,7 +443,7 @@ async function doIntrospect() {
     token_type_hint: getVal('intr-hint'),
   };
   try {
-    const res = await fetch('/api/introspect', {
+    const res = await fetch('api/introspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -464,7 +464,7 @@ async function decodeJWT() {
     return;
   }
   try {
-    const res = await fetch('/api/jwt/decode', {
+    const res = await fetch('api/jwt/decode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),
@@ -554,14 +554,14 @@ function renderFlowPreview() {
 }
 
 function startFlow() {
-  window.location.href = '/auth/start';
+  window.location.href = 'auth/start';
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
 
 async function loadHistory(highlightId) {
   try {
-    const res = await fetch('/api/history');
+    const res = await fetch('api/history');
     const entries = await res.json();
     renderHistory(entries, highlightId);
     updateSessionBadge(entries);
@@ -575,7 +575,7 @@ async function loadHistory(highlightId) {
 // another client of the provider does not show here.
 async function refreshSessionBadge() {
   try {
-    const res = await fetch('/api/history');
+    const res = await fetch('api/history');
     updateSessionBadge(await res.json());
   } catch (_) {}
 }
@@ -613,7 +613,7 @@ function displayName(claims) {
 // sent with a logout of the history.
 async function checkLogoutState(returned) {
   try {
-    const res = await fetch('/api/history');
+    const res = await fetch('api/history');
     const entry = (await res.json()).find(e => e.logout_state && e.logout_state === returned);
     if (entry) {
       showStatus('history-status', `Back from logout of flow ${entry.id}, state matches`);
@@ -630,7 +630,7 @@ async function checkLogoutState(returned) {
 function postLogout(flowId) {
   const form = document.createElement('form');
   form.method = 'POST';
-  form.action = '/auth/logout';
+  form.action = 'auth/logout';
   const input = document.createElement('input');
   input.type = 'hidden';
   input.name = 'flow';
@@ -866,7 +866,7 @@ function makeInnerTabs(tabs) {
 
 async function renderJWTInline(container, token) {
   try {
-    const res = await fetch('/api/jwt/decode', {
+    const res = await fetch('api/jwt/decode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),
@@ -899,7 +899,7 @@ async function renderJWTInline(container, token) {
 
 async function doInlineRefresh(container, refreshToken) {
   try {
-    const res = await fetch('/api/token/refresh', {
+    const res = await fetch('api/token/refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1179,7 +1179,7 @@ function copyText(text) {
 
 async function genRandom(id, bytes) {
   try {
-    const res = await fetch('/api/pkce/generate', {
+    const res = await fetch('api/pkce/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ method: 'plain' }),

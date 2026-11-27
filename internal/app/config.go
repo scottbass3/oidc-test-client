@@ -50,8 +50,9 @@ type ConfigStore struct {
 
 // NewConfigStore reads the configuration from the file, then the environment.
 // Locked, the file is left out: the provider and the client come from the
-// environment only.
-func NewConfigStore(filepath string, locked bool) *ConfigStore {
+// environment only. With webURL, the public URL of the client, the redirect
+// URIs left empty are the ones under it.
+func NewConfigStore(filepath string, locked bool, webURL string) *ConfigStore {
 	cs := &ConfigStore{
 		config:   defaultConfig(),
 		filepath: filepath,
@@ -60,6 +61,14 @@ func NewConfigStore(filepath string, locked bool) *ConfigStore {
 		cs.loadFromFile()
 	}
 	cs.loadFromEnv()
+	if webURL != "" {
+		if cs.config.RedirectURI == "" {
+			cs.config.RedirectURI = webURL + "auth/callback"
+		}
+		if cs.config.PostLogoutRedirectURI == "" {
+			cs.config.PostLogoutRedirectURI = webURL
+		}
+	}
 	return cs
 }
 
